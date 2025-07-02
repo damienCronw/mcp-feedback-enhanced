@@ -51,6 +51,123 @@
   gap: 20px;
 }
 
+/* 緊湊版頂部欄 */
+.connection-monitor-bar.compact {
+  padding: 4px 12px;
+  gap: 0;
+  font-size: 12px;
+  height: 32px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+/* 緊湊版元素樣式 */
+.app-title-compact {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.info-separator {
+  margin: 0 6px;
+  color: var(--text-secondary);
+  opacity: 0.4;
+  font-size: 10px;
+}
+
+.project-info-compact,
+.session-info-compact,
+.countdown-display-compact,
+.connection-status-compact {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.project-info-compact .project-path-display {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.session-info-compact .session-id-display {
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+.countdown-display-compact {
+  color: var(--warning-color);
+}
+
+.countdown-display-compact .countdown-timer {
+  font-weight: bold;
+  font-size: 12px;
+}
+
+/* 倒數計時器控制按鈕 */
+.countdown-control-btn {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  margin-left: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--warning-color);
+  transition: all 0.2s ease;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+}
+
+.countdown-control-btn:hover {
+  background: rgba(255, 152, 0, 0.2);
+}
+
+.countdown-control-btn:active {
+  transform: scale(0.95);
+}
+
+/* 暫停狀態的計時器樣式 */
+.countdown-display-compact.paused .countdown-timer {
+  opacity: 0.6;
+  animation: pause-blink 1.5s ease-in-out infinite;
+}
+
+@keyframes pause-blink {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.3; }
+}
+
+.connection-status-compact {
+  margin-left: auto;
+}
+
+.connection-status-compact .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.connection-status-compact.connected {
+  color: var(--status-connected);
+}
+
+.connection-status-compact.disconnected {
+  color: var(--status-disconnected);
+}
+
+.connection-status-compact.connecting {
+  color: var(--status-connecting);
+}
+
 /* 應用資訊區域 */
 .app-info-section {
   display: flex;
@@ -648,42 +765,37 @@
 
 /* ===== 響應式設計 ===== */
 @media (max-width: 768px) {
-  .connection-monitor-bar {
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 16px;
+  /* 緊湊版頂部欄在移動設備上的調整 */
+  .connection-monitor-bar.compact {
+    padding: 4px 10px;
+    font-size: 11px;
+    overflow-x: auto;
+    white-space: nowrap;
   }
-
-  .app-info-section {
-    width: 100%;
-    text-align: center;
+  
+  /* 隱藏專案路徑以節省空間 */
+  .project-info-compact {
+    display: none;
   }
-
-  .app-title {
-    justify-content: center;
-    flex-wrap: wrap;
+  
+  /* 隱藏相關的分隔符 */
+  .project-info-compact + .info-separator {
+    display: none;
   }
-
-  .app-title h1 {
-    font-size: 16px;
+  
+  /* 調整標題字體 */
+  .app-title-compact {
+    font-size: 12px;
   }
-
-  .connection-status-group {
-    width: 100%;
-    justify-content: center;
-    flex-wrap: wrap;
+  
+  /* 減少分隔符間距 */
+  .info-separator {
+    margin: 0 6px;
   }
-
-  .connection-status-combined {
-    width: 100%;
-    align-items: center;
-  }
-
-  .detailed-status-info {
-    margin-left: 0;
-    margin-top: 0;
-    justify-content: center;
-    flex-wrap: wrap;
+  
+  /* 確保倒數計時器始終可見 */
+  .countdown-display-compact {
+    font-weight: bold;
   }
 
   /* 會話管理頁籤響應式調整 */
@@ -694,6 +806,28 @@
   .stats-grid {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+}
+
+/* 超小螢幕調整 */
+@media (max-width: 480px) {
+  /* 隱藏會話 ID */
+  .session-info-compact {
+    display: none;
+  }
+  
+  /* 隱藏相關的分隔符 */
+  .session-info-compact + .info-separator {
+    display: none;
+  }
+  
+  /* 保留核心資訊：標題、倒數計時器、連線狀態 */
+  .connection-monitor-bar.compact {
+    justify-content: space-between;
+  }
+  
+  .connection-status-compact {
+    margin-left: 0;
   }
 }
 
@@ -722,6 +856,65 @@
 .btn-small:focus {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
+}
+
+/* ===== 會話歷史區塊標題樣式 ===== */
+.session-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.session-history-header h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.session-history-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 響應式設計 - 小螢幕上的調整 */
+@media (max-width: 768px) {
+  .session-history-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  
+  .session-history-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  
+  .session-history-actions .btn-small {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+}
+
+/* 超小螢幕上使用下拉選單替代 */
+@media (max-width: 480px) {
+  .session-history-actions {
+    position: relative;
+  }
+  
+  .session-history-actions .btn-small:not(:first-child) {
+    display: none;
+  }
+  
+  /* 可選：將第一個按鈕改為下拉選單觸發器 */
+  .session-history-actions .btn-small:first-child::after {
+    content: ' ▼';
+    font-size: 10px;
+    margin-left: 4px;
+  }
 }
 
 /* ===== 會話詳情彈窗 ===== */
@@ -753,7 +946,7 @@
   border: 1px solid var(--border-color);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  max-width: 500px;
+  max-width: 750px;
   width: 90%;
   max-height: 80vh;
   overflow: hidden;
@@ -854,11 +1047,149 @@
 
 .detail-value.summary {
   background: var(--bg-secondary);
-  padding: 8px 12px;
+  padding: 0;
   border-radius: 6px;
   border-left: 3px solid var(--accent-color);
   line-height: 1.4;
   margin-top: 4px;
+  position: relative;
+}
+
+.summary-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+}
+
+.btn-copy-summary {
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast) ease;
+  opacity: 0.8;
+}
+
+.btn-copy-summary:hover {
+  opacity: 1;
+  background: #1976d2;
+  transform: scale(1.05);
+}
+
+.summary-content {
+  padding: 8px 12px;
+  padding-right: 50px; /* 为复制按钮留出空间 */
+}
+
+/* 为会话详情弹窗中的摘要内容应用与反馈页面相同的 Markdown 样式 */
+.detail-value.summary .summary-content h1,
+.detail-value.summary .summary-content h2,
+.detail-value.summary .summary-content h3,
+.detail-value.summary .summary-content h4,
+.detail-value.summary .summary-content h5,
+.detail-value.summary .summary-content h6 {
+  color: var(--text-primary);
+  margin: 16px 0 8px 0;
+  font-weight: 600;
+}
+
+.detail-value.summary .summary-content h1 { font-size: 20px; }
+.detail-value.summary .summary-content h2 { font-size: 18px; }
+.detail-value.summary .summary-content h3 { font-size: 16px; }
+.detail-value.summary .summary-content h4 { font-size: 14px; }
+.detail-value.summary .summary-content h5 { font-size: 13px; }
+.detail-value.summary .summary-content h6 { font-size: 12px; }
+
+.detail-value.summary .summary-content p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.detail-value.summary .summary-content strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detail-value.summary .summary-content em {
+  font-style: italic;
+  color: var(--text-primary);
+}
+
+.detail-value.summary .summary-content code {
+  background: var(--bg-tertiary);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  color: var(--accent-color);
+}
+
+.detail-value.summary .summary-content pre {
+  background: var(--bg-tertiary);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 12px 0;
+  border-left: 3px solid var(--accent-color);
+}
+
+.detail-value.summary .summary-content pre code {
+  background: none;
+  padding: 0;
+  color: var(--text-primary);
+}
+
+.detail-value.summary .summary-content ul,
+.detail-value.summary .summary-content ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.detail-value.summary .summary-content li {
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+.detail-value.summary .summary-content blockquote {
+  border-left: 4px solid var(--accent-color);
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: rgba(0, 122, 204, 0.05);
+  font-style: italic;
+}
+
+/* 复制提示样式 */
+.copy-toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 12px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  z-index: 10000;
+  opacity: 0;
+  transform: translateX(100px);
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.copy-toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.copy-toast-success {
+  background: var(--success-color);
+}
+
+.copy-toast-error {
+  background: var(--error-color);
 }
 
 .modal-footer {
@@ -922,6 +1253,36 @@
 
 .user-message-item:hover {
   background: var(--bg-secondary);
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.message-header .btn-copy-message {
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all var(--transition-fast) ease;
+  opacity: 0.7;
+  margin-left: 8px;
+}
+
+.message-header .btn-copy-message:hover {
+  opacity: 1;
+  background: #1976d2;
+  transform: scale(1.05);
+}
+
+.user-message-item:hover .btn-copy-message {
+  opacity: 0.9;
 }
 
 .message-header {
@@ -1034,5 +1395,34 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* 響應式設計 - 緊湊版頂部欄 */
+@media (max-width: 768px) {
+  /* 小螢幕隱藏專案路徑 */
+  .connection-monitor-bar.compact .project-info-compact {
+    display: none;
+  }
+  
+  /* 隱藏相鄰的分隔符 */
+  .connection-monitor-bar.compact .project-info-compact + .info-separator {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  /* 極小螢幕只顯示最關鍵資訊 */
+  .connection-monitor-bar.compact .session-info-compact {
+    display: none;
+  }
+  
+  .connection-monitor-bar.compact .session-info-compact + .info-separator {
+    display: none;
+  }
+  
+  /* 調整標題字體大小 */
+  .app-title-compact {
+    font-size: 12px;
   }
 }

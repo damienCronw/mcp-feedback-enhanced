@@ -1,4 +1,4 @@
-# Release v2.5.4 - Latest Release
+# Release v2.6.0 - Latest Release
 
 ## 🌟 Key Highlights
 
@@ -23,7 +23,7 @@
 uvx mcp-feedback-enhanced@latest
 
 # This specific version / 此特定版本
-uvx mcp-feedback-enhanced@v2.5.4
+uvx mcp-feedback-enhanced@v2.6.0
 ```
 
 ## 🔗 Links

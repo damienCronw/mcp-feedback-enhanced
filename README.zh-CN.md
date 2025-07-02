@@ -8,7 +8,7 @@
 
 ## 🎯 核心概念
 
-这是一个 [MCP 服务器](https://modelcontextprotocol.io/)，建立**反馈导向的开发工作流程**，提供**Web UI 和桌面应用程序**双重选择，完美适配本地、**SSH Remote 环境**（Cursor SSH Remote、VS Code Remote SSH）与 **WSL (Windows Subsystem for Linux) 环境**。通过引导 AI 与用户确认而非进行推测性操作，可将多次工具调用合并为单次反馈导向请求，大幅节省平台成本并提升开发效率。
+这是一个 [MCP 服务器](https://modelcontextprotocol.io/)，建立**反馈导向的开发工作流程**，提供**Web UI 和桌面应用程序**双重选择，完美适配本地、**SSH 远程开发环境**与 **WSL (Windows Subsystem for Linux) 环境**。通过引导 AI 与用户确认而非进行推测性操作，可将多次工具调用合并为单次反馈导向请求，大幅节省平台成本并提升开发效率。
 
 **🌐 双重界面架构优势：**
 - 🖥️ **桌面应用程序**：原生跨平台桌面体验，支持 Windows、macOS、Linux
@@ -38,15 +38,17 @@
 
 ### 📝 智能工作流程
 - **提示词管理**：常用提示词的 CRUD 操作、使用统计、智能排序
-- **自动定时提交**：1-86400 秒弹性计时器，支持暂停、恢复、取消
-- **会话管理追踪**：本地文件存储、隐私控制、历史导出、即时统计
+- **自动定时提交**：1-86400 秒弹性计时器，支持暂停、恢复、取消，新增暂停/开始按钮控制
+- **自动执行命令**（v2.6.0）：新建会话和提交后可自动执行预设命令，提升开发效率
+- **会话管理追踪**：本地文件存储、隐私控制、历史导出（支持 JSON、CSV、Markdown 格式）、即时统计、弹性超时设定
 - **连接监控**：WebSocket 状态监控、自动重连、品质指示
 - **AI 工作摘要 Markdown 显示**：支持丰富的 Markdown 语法渲染，包含标题、粗体、代码区块、列表、链接等格式，提升内容可读性
 
 ### 🎨 现代化体验
 - **响应式设计**：适配不同屏幕尺寸，模块化 JavaScript 架构
 - **音效通知**：内建多种音效、支持自定义音效上传、音量控制
-- **智能记忆**：输入框高度记忆、一键复制、设定持久化
+- **系统通知**（v2.6.0）：重要事件（如自动提交、会话超时等）的系统级即时提醒
+- **智能记忆**：输入框高度记忆、一键复制、设置持久化
 - **多语言支持**：简体中文、英文、繁体中文，即时切换
 
 ### 🖼️ 图片与媒体
@@ -59,7 +61,7 @@
 ### Web UI 界面（v2.5.0 - 支持桌面应用程序）
 
 <div align="center">
-  <img src="docs/zh-CN/images/web1.jpeg" width="400" alt="Web UI 主界面 - 提示词管理与自动提交" />
+  <img src="docs/zh-CN/images/web1.png" width="400" alt="Web UI 主界面 - 提示词管理与自动提交" />
 </div>
 
 <details>
@@ -92,9 +94,6 @@
 ```bash
 # 安装 uv（如果尚未安装）
 pip install uv
-
-# 快速测试
-uvx mcp-feedback-enhanced@latest test
 ```
 
 ### 2. 配置 MCP
@@ -122,7 +121,9 @@ uvx mcp-feedback-enhanced@latest test
       "timeout": 600,
       "env": {
         "MCP_DEBUG": "false",
-        "MCP_WEB_PORT": "8765"
+        "MCP_WEB_HOST": "127.0.0.1",
+        "MCP_WEB_PORT": "8765",
+        "MCP_LANGUAGE": "zh-CN"
       },
       "autoApprove": ["interactive_feedback"]
     }
@@ -140,6 +141,7 @@ uvx mcp-feedback-enhanced@latest test
       "timeout": 600,
       "env": {
         "MCP_DESKTOP_MODE": "true",
+        "MCP_WEB_HOST": "127.0.0.1",
         "MCP_WEB_PORT": "8765",
         "MCP_DEBUG": "false"
       },
@@ -153,27 +155,42 @@ uvx mcp-feedback-enhanced@latest test
 - 桌面模式：[examples/mcp-config-desktop.json](examples/mcp-config-desktop.json)
 - Web 模式：[examples/mcp-config-web.json](examples/mcp-config-web.json)
 
-### 3. 设定提示工程
+### 3. 设置提示工程
 为了获得最佳效果，请在 AI 助手中添加以下规则：
 
 ```
 # MCP Interactive Feedback 规则
 
-1. 在任何流程、任务、对话进行时，无论是询问、回复、或完成阶段性任务，皆必须调用 MCP mcp-feedback-enhanced。
-2. 每当收到用户反馈，若反馈内容非空，必须再次调用 MCP mcp-feedback-enhanced，并根据反馈内容调整行为。
-3. 仅当用户明确表示「结束」或「不再需要交互」时，才可停止调用 MCP mcp-feedback-enhanced，流程才算结束。
-4. 除非收到结束指令，否则所有步骤都必须重复调用 MCP mcp-feedback-enhanced。
-5. 完成任务前，必须使用 MCP mcp-feedback-enhanced 工具向用户询问反馈。
+注意在任务完成前根据mcp-feedback-enhanced工具的要求进行工具调用
 ```
 
-## ⚙️ 进阶设定
+## ⚙️ 高级设置
 
 ### 环境变量
 | 变量 | 用途 | 值 | 默认 |
 |------|------|-----|------|
 | `MCP_DEBUG` | 调试模式 | `true`/`false` | `false` |
+| `MCP_WEB_HOST` | Web UI 主机绑定 | IP 地址或主机名 | `127.0.0.1` |
 | `MCP_WEB_PORT` | Web UI 端口 | `1024-65535` | `8765` |
 | `MCP_DESKTOP_MODE` | 桌面应用程序模式 | `true`/`false` | `false` |
+| `MCP_LANGUAGE` | 强制指定界面语言 | `zh-TW`/`zh-CN`/`en` | 自动检测 |
+
+**`MCP_WEB_HOST` 说明**：
+- `127.0.0.1`（默认）：仅本地访问，安全性较高
+- `0.0.0.0`：允许远程访问，适用于 SSH 远程开发环境
+
+**`MCP_LANGUAGE` 说明**：
+- 用于强制指定界面语言，覆盖系统自动检测
+- 支持的语言代码：
+  - `zh-TW`：繁体中文
+  - `zh-CN`：简体中文
+  - `en`：英文
+- 语言检测优先顺序：
+  1. 用户在界面中保存的语言设置（最高优先级）
+  2. `MCP_LANGUAGE` 环境变量
+  3. 系统环境变量（LANG、LC_ALL 等）
+  4. 系统默认语言
+  5. 回退到默认语言（繁体中文）
 
 ### 测试选项
 ```bash
@@ -186,6 +203,11 @@ uvx mcp-feedback-enhanced@latest test --desktop # 测试桌面应用程序 (v2.5
 
 # 调试模式
 MCP_DEBUG=true uvx mcp-feedback-enhanced@latest test
+
+# 指定语言测试
+MCP_LANGUAGE=en uvx mcp-feedback-enhanced@latest test --web    # 强制使用英文界面
+MCP_LANGUAGE=zh-TW uvx mcp-feedback-enhanced@latest test --web  # 强制使用繁体中文
+MCP_LANGUAGE=zh-CN uvx mcp-feedback-enhanced@latest test --web  # 强制使用简体中文
 ```
 
 ### 开发者安装
@@ -233,21 +255,49 @@ make quick-check                                        # 快速检查并自动�
 
 📋 **完整版本更新记录：** [RELEASE_NOTES/CHANGELOG.zh-CN.md](RELEASE_NOTES/CHANGELOG.zh-CN.md)
 
-### 最新版本亮点（v2.5.0）
-- 🖥️ **桌面应用程序**: 全新跨平台桌面应用，支持 Windows、macOS、Linux
-- 📋 **AI 工作摘要 Markdown 显示**: 支持 Markdown 语法渲染，包含标题、粗体、代码区块、列表、链接等格式
-- ⚡ **性能大幅提升**: 引入防抖/节流机制，减少不必要的渲染和网络请求
-- 📊 **会话历史存储改进**: 从 localStorage 改为服务器端本地文件存储
-- 🌐 **网络连接稳定性**: 改进 WebSocket 重连机制，支持网络状态检测
-- 🎨 **UI 渲染优化**: 优化会话管理、统计信息、状态指示器的渲染性能
-- 🛠️ **构建流程优化**: 新增 Makefile 桌面应用构建命令和开发工具
-- 📚 **文档完善**: 新增桌面应用构建指南和工作流程说明
+### 最新版本亮点（v2.6.0）
+- 🚀 **自动执行命令**: 新建会话和提交后可自动执行预设命令，提升工作效率
+- 📊 **会话导出功能**: 支持将会话记录导出为多种格式，方便分享和存档
+- ⏸️ **自动提交控制**: 新增暂停和开始按钮，让用户更好控制自动提交时机
+- 🔔 **系统通知**: 新增系统级通知功能，重要事件即时提醒
+- ⏱️ **会话超时机制优化**: 重新设计会话管理，提供更弹性的设置选项
+- 🌏 **多语系强化**: 重构多语系架构，通知系统也完整支持多语言
+- 🎨 **界面简化**: 大幅简化用户界面，提升使用体验
 
 ## 🐛 常见问题
 
 ### 🌐 SSH Remote 环境问题
-**Q: SSH Remote 环境下浏览器无法启动**
-A: 这是正常现象。SSH Remote 环境没有图形界面，需要手动在本地浏览器打开。详细解决方案请参考：[SSH Remote 环境使用指南](docs/zh-CN/ssh-remote/browser-launch-issues.md)
+**Q: SSH Remote 环境下浏览器无法启动或无法访问**
+A: 提供两种解决方案：
+
+**方案一：环境变量设置（v2.5.5 推荐）**
+在 MCP 配置中设置 `"MCP_WEB_HOST": "0.0.0.0"` 允许远程访问：
+```json
+{
+  "mcpServers": {
+    "mcp-feedback-enhanced": {
+      "command": "uvx",
+      "args": ["mcp-feedback-enhanced@latest"],
+      "timeout": 600,
+      "env": {
+        "MCP_WEB_HOST": "0.0.0.0",
+        "MCP_WEB_PORT": "8765"
+      },
+      "autoApprove": ["interactive_feedback"]
+    }
+  }
+}
+```
+然后在本地浏览器打开：`http://[远程主机IP]:8765`
+
+**方案二：SSH 端口转发（传统方法）**
+1. 使用默认配置（`MCP_WEB_HOST`: `127.0.0.1`）
+2. 设置 SSH 端口转发：
+   - **VS Code Remote SSH**: 按 `Ctrl+Shift+P` → "Forward a Port" → 输入 `8765`
+   - **Cursor SSH Remote**: 手动添加端口转发规则（端口 8765）
+3. 在本地浏览器打开：`http://localhost:8765`
+
+详细解决方案请参考：[SSH Remote 环境使用指南](docs/zh-CN/ssh-remote/browser-launch-issues.md)
 
 **Q: 为什么没有接收到 MCP 新的反馈？**
 A: 可能是 WebSocket 连接问题。**解决方法**：直接重新刷新浏览器页面。
@@ -340,6 +390,15 @@ A: 各种 AI 模型（包括 Gemini Pro 2.5、Claude 等）在图片解析上可
 ### 贡献者
 **penn201500** - [GitHub @penn201500](https://github.com/penn201500)
 - 🎯 自动聚焦输入框功能 ([PR #39](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/39))
+
+**leo108** - [GitHub @leo108](https://github.com/leo108)
+- 🌐 SSH 远程开发支持 (`MCP_WEB_HOST` 环境变量) ([PR #113](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/113))
+
+**Alsan** - [GitHub @Alsan](https://github.com/Alsan)
+- 🍎 macOS PyO3 编译配置支持 ([PR #93](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/93))
+
+**fireinice** - [GitHub @fireinice](https://github.com/fireinice)
+- 📝 工具文档优化 (LLM 指令移至 docstring) ([PR #105](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/105))
 
 ### 社群支援
 - **Discord：** [https://discord.gg/Gur2V67](https://discord.gg/Gur2V67)

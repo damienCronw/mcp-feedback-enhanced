@@ -23,14 +23,17 @@
     function SettingsManager(options) {
         options = options || {};
         
+        // 從 i18nManager 獲取當前語言作為預設值
+        const defaultLanguage = window.i18nManager ? window.i18nManager.getCurrentLanguage() : 'zh-TW';
+        
         // 預設設定
         this.defaultSettings = {
             layoutMode: 'combined-vertical',
             autoClose: false,
-            language: 'zh-TW',
+            language: defaultLanguage,  // 使用 i18nManager 的當前語言
             imageSizeLimit: 0,
             enableBase64Detail: false,
-            activeTab: 'combined',
+            // 移除 activeTab - 頁籤切換無需持久化
             sessionPanelCollapsed: false,
             // 自動定時提交設定
             autoSubmitEnabled: false,
@@ -47,7 +50,14 @@
             userMessageRecordingEnabled: true,
             userMessagePrivacyLevel: 'full', // 'full', 'basic', 'disabled'
             // UI 元素尺寸設定
-            combinedFeedbackTextHeight: 150 // combinedFeedbackText textarea 的高度（px）
+            combinedFeedbackTextHeight: 150, // combinedFeedbackText textarea 的高度（px）
+            // 會話超時設定
+            sessionTimeoutEnabled: false,  // 預設關閉
+            sessionTimeoutSeconds: 3600,   // 預設 1 小時（秒）
+            // 自動執行命令設定
+            autoCommandEnabled: true,      // 是否啟用自動執行命令
+            commandOnNewSession: '',       // 新會話建立時執行的命令
+            commandOnFeedbackSubmit: ''    // 提交回饋後執行的命令
         };
         
         // 當前設定
@@ -58,12 +68,7 @@
         this.onLanguageChange = options.onLanguageChange || null;
         this.onAutoSubmitStateChange = options.onAutoSubmitStateChange || null;
 
-        // 防抖機制相關
-        this.saveToServerDebounceTimer = null;
-        this.saveToServerDebounceDelay = options.saveDebounceDelay || 500; // 預設 500ms 防抖延遲
-        this.pendingServerSave = false;
-
-        console.log('✅ SettingsManager 建構函數初始化完成，防抖延遲:', this.saveToServerDebounceDelay + 'ms');
+        console.log('✅ SettingsManager 建構函數初始化完成 - 即時保存模式');
     }
 
     /**
@@ -74,29 +79,28 @@
         
         return new Promise(function(resolve, reject) {
             logger.info('開始載入設定...');
-            
-            // 優先從伺服器端載入設定
+
+            // 只從伺服器端載入設定
             self.loadFromServer()
                 .then(function(serverSettings) {
                     if (serverSettings && Object.keys(serverSettings).length > 0) {
                         self.currentSettings = self.mergeSettings(self.defaultSettings, serverSettings);
                         logger.info('從伺服器端載入設定成功:', self.currentSettings);
-                        
-                        // 同步到 localStorage
-                        self.saveToLocalStorage();
-                        resolve(self.currentSettings);
-                    } else {
-                        // 回退到 localStorage
-                        return self.loadFromLocalStorage();
-                    }
-                })
-                .then(function(localSettings) {
-                    if (localSettings) {
-                        self.currentSettings = self.mergeSettings(self.defaultSettings, localSettings);
-                        console.log('從 localStorage 載入設定:', self.currentSettings);
                     } else {
                         console.log('沒有找到設定，使用預設值');
+                        self.currentSettings = Utils.deepClone(self.defaultSettings);
                     }
+                    
+                    // 同步語言設定到 i18nManager
+                    if (self.currentSettings.language && window.i18nManager) {
+                        const currentI18nLanguage = window.i18nManager.getCurrentLanguage();
+                        if (self.currentSettings.language !== currentI18nLanguage) {
+                            console.log('🔧 SettingsManager.loadSettings: 同步語言設定到 i18nManager');
+                            console.log('  從:', currentI18nLanguage, '到:', self.currentSettings.language);
+                            window.i18nManager.setLanguage(self.currentSettings.language);
+                        }
+                    }
+                    
                     resolve(self.currentSettings);
                 })
                 .catch(function(error) {
@@ -111,7 +115,8 @@
      * 從伺服器載入設定
      */
     SettingsManager.prototype.loadFromServer = function() {
-        return fetch('/api/load-settings')
+        const lang = window.i18nManager ? window.i18nManager.getCurrentLanguage() : 'zh-TW';
+        return fetch('/api/load-settings?lang=' + lang)
             .then(function(response) {
                 if (response.ok) {
                     return response.json();
@@ -125,27 +130,7 @@
             });
     };
 
-    /**
-     * 從 localStorage 載入設定
-     */
-    SettingsManager.prototype.loadFromLocalStorage = function() {
-        if (!Utils.isLocalStorageSupported()) {
-            return Promise.resolve(null);
-        }
 
-        try {
-            const localSettings = localStorage.getItem('mcp-feedback-settings');
-            if (localSettings) {
-                const parsed = Utils.safeJsonParse(localSettings, null);
-                console.log('從 localStorage 載入設定:', parsed);
-                return Promise.resolve(parsed);
-            }
-        } catch (error) {
-            console.warn('從 localStorage 載入設定失敗:', error);
-        }
-        
-        return Promise.resolve(null);
-    };
 
     /**
      * 保存設定
@@ -157,10 +142,7 @@
 
         logger.debug('保存設定:', this.currentSettings);
 
-        // 保存到 localStorage
-        this.saveToLocalStorage();
-
-        // 同步保存到伺服器端
+        // 只保存到伺服器端
         this.saveToServer();
 
         // 觸發回調
@@ -171,39 +153,13 @@
         return this.currentSettings;
     };
 
-    /**
-     * 保存到 localStorage
-     */
-    SettingsManager.prototype.saveToLocalStorage = function() {
-        if (!Utils.isLocalStorageSupported()) {
-            return;
-        }
 
-        try {
-            localStorage.setItem('mcp-feedback-settings', JSON.stringify(this.currentSettings));
-        } catch (error) {
-            console.error('保存設定到 localStorage 失敗:', error);
-        }
-    };
 
     /**
-     * 保存到伺服器（帶防抖機制）
+     * 保存到伺服器（即時保存）
      */
     SettingsManager.prototype.saveToServer = function() {
-        const self = this;
-
-        // 清除之前的定時器
-        if (self.saveToServerDebounceTimer) {
-            clearTimeout(self.saveToServerDebounceTimer);
-        }
-
-        // 標記有待處理的保存操作
-        self.pendingServerSave = true;
-
-        // 設置新的防抖定時器
-        self.saveToServerDebounceTimer = setTimeout(function() {
-            self._performServerSave();
-        }, self.saveToServerDebounceDelay);
+        this._performServerSave();
     };
 
     /**
@@ -212,13 +168,8 @@
     SettingsManager.prototype._performServerSave = function() {
         const self = this;
 
-        if (!self.pendingServerSave) {
-            return;
-        }
-
-        self.pendingServerSave = false;
-
-        fetch('/api/save-settings', {
+        const lang = window.i18nManager ? window.i18nManager.getCurrentLanguage() : 'zh-TW';
+        fetch('/api/save-settings?lang=' + lang, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -226,10 +177,18 @@
             body: JSON.stringify(self.currentSettings)
         })
         .then(function(response) {
-            if (response.ok) {
-                console.log('設定已同步到伺服器端');
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.status === 'success') {
+                console.log('設定已即時同步到伺服器端');
+                // 處理訊息代碼
+                if (data.messageCode && window.i18nManager) {
+                    const message = window.i18nManager.t(data.messageCode, data.params);
+                    console.log('伺服器回應:', message);
+                }
             } else {
-                console.warn('同步設定到伺服器端失敗:', response.status);
+                console.warn('同步設定到伺服器端失敗:', data);
             }
         })
         .catch(function(error) {
@@ -237,20 +196,7 @@
         });
     };
 
-    /**
-     * 立即保存到伺服器（跳過防抖機制）
-     * 用於重要操作，如語言變更、重置設定等
-     */
-    SettingsManager.prototype.saveToServerImmediate = function() {
-        // 清除防抖定時器
-        if (this.saveToServerDebounceTimer) {
-            clearTimeout(this.saveToServerDebounceTimer);
-            this.saveToServerDebounceTimer = null;
-        }
 
-        // 立即執行保存
-        this._performServerSave();
-    };
 
     /**
      * 合併設定
@@ -283,22 +229,14 @@
     SettingsManager.prototype.set = function(key, value) {
         const oldValue = this.currentSettings[key];
         this.currentSettings[key] = value;
-        
+
         // 特殊處理語言變更
         if (key === 'language' && oldValue !== value) {
             this.handleLanguageChange(value);
-            // 語言變更是重要操作，立即保存
-            this.saveToLocalStorage();
-            this.saveToServerImmediate();
-
-            // 觸發回調
-            if (this.onSettingsChange) {
-                this.onSettingsChange(this.currentSettings);
-            }
-        } else {
-            // 一般設定變更使用防抖保存
-            this.saveSettings();
         }
+
+        // 所有設定變更都即時保存
+        this.saveSettings();
 
         return this;
     };
@@ -332,15 +270,11 @@
      * 處理語言變更
      */
     SettingsManager.prototype.handleLanguageChange = function(newLanguage) {
-        console.log('語言設定變更: ' + newLanguage);
+        console.log('🔄 SettingsManager.handleLanguageChange: ' + newLanguage);
 
-        // 同步到 localStorage
-        if (Utils.isLocalStorageSupported()) {
-            localStorage.setItem('language', newLanguage);
-        }
-
-        // 通知國際化系統
+        // 通知國際化系統（統一由 SettingsManager 管理）
         if (window.i18nManager) {
+            // 使用 setLanguage 方法確保正確更新
             window.i18nManager.setLanguage(newLanguage);
         }
 
@@ -361,17 +295,11 @@
     SettingsManager.prototype.resetSettings = function() {
         console.log('重置所有設定');
 
-        // 清除 localStorage
-        if (Utils.isLocalStorageSupported()) {
-            localStorage.removeItem('mcp-feedback-settings');
-        }
-
         // 重置為預設值
         this.currentSettings = Utils.deepClone(this.defaultSettings);
 
-        // 立即保存重置後的設定（重要操作）
-        this.saveToLocalStorage();
-        this.saveToServerImmediate();
+        // 立即保存重置後的設定到伺服器
+        this.saveToServer();
 
         // 觸發回調
         if (this.onSettingsChange) {
@@ -496,6 +424,9 @@
 
         // 應用用戶訊息記錄設定
         this.applyUserMessageSettings();
+        
+        // 應用會話超時設定
+        this.applySessionTimeoutSettings();
     };
 
     /**
@@ -679,6 +610,28 @@
     };
 
     /**
+     * 應用會話超時設定
+     */
+    SettingsManager.prototype.applySessionTimeoutSettings = function() {
+        // 更新會話超時啟用開關
+        const sessionTimeoutEnabled = Utils.safeQuerySelector('#sessionTimeoutEnabled');
+        if (sessionTimeoutEnabled) {
+            sessionTimeoutEnabled.checked = this.currentSettings.sessionTimeoutEnabled;
+        }
+
+        // 更新會話超時時間輸入框
+        const sessionTimeoutSeconds = Utils.safeQuerySelector('#sessionTimeoutSeconds');
+        if (sessionTimeoutSeconds) {
+            sessionTimeoutSeconds.value = this.currentSettings.sessionTimeoutSeconds;
+        }
+
+        console.log('會話超時設定已應用到 UI:', {
+            enabled: this.currentSettings.sessionTimeoutEnabled,
+            seconds: this.currentSettings.sessionTimeoutSeconds
+        });
+    };
+
+    /**
      * 更新隱私等級描述文字
      */
     SettingsManager.prototype.updatePrivacyLevelDescription = function(privacyLevel) {
@@ -788,7 +741,10 @@
                 try {
                     // 如果要啟用自動提交，檢查是否已選擇提示詞
                     if (newValue && (!currentPromptId || currentPromptId === '')) {
-                        Utils.showMessage('請先選擇一個提示詞作為自動提交內容', Utils.CONSTANTS.MESSAGE_WARNING);
+                        const message = window.i18nManager ? 
+                            window.i18nManager.t('settingsUI.autoCommitNoPrompt', '請先選擇一個提示詞作為自動提交內容') : 
+                            '請先選擇一個提示詞作為自動提交內容';
+                        Utils.showMessage(message, Utils.CONSTANTS.MESSAGE_WARNING);
                         return;
                     }
 
@@ -969,6 +925,59 @@
                 self.set('userMessagePrivacyLevel', privacyLevel);
                 self.updatePrivacyLevelDescription(privacyLevel);
                 console.log('用戶訊息隱私等級已更新:', privacyLevel);
+            });
+        }
+
+        // 會話超時啟用開關
+        const sessionTimeoutEnabled = Utils.safeQuerySelector('#sessionTimeoutEnabled');
+        if (sessionTimeoutEnabled) {
+            sessionTimeoutEnabled.addEventListener('change', function() {
+                const newValue = sessionTimeoutEnabled.checked;
+                self.set('sessionTimeoutEnabled', newValue);
+                console.log('會話超時狀態已更新:', newValue);
+                
+                // 觸發 WebSocket 通知後端更新超時設定
+                if (window.MCPFeedback && window.MCPFeedback.app && window.MCPFeedback.app.webSocketManager) {
+                    window.MCPFeedback.app.webSocketManager.send({
+                        type: 'update_timeout_settings',
+                        settings: {
+                            enabled: newValue,
+                            seconds: self.get('sessionTimeoutSeconds')
+                        }
+                    });
+                }
+            });
+        }
+
+        // 會話超時時間設定
+        const sessionTimeoutSeconds = Utils.safeQuerySelector('#sessionTimeoutSeconds');
+        if (sessionTimeoutSeconds) {
+            sessionTimeoutSeconds.addEventListener('change', function(e) {
+                const seconds = parseInt(e.target.value);
+                
+                // 驗證輸入值範圍
+                if (isNaN(seconds) || seconds < 300) {
+                    e.target.value = 300;
+                    self.set('sessionTimeoutSeconds', 300);
+                } else if (seconds > 86400) {
+                    e.target.value = 86400;
+                    self.set('sessionTimeoutSeconds', 86400);
+                } else {
+                    self.set('sessionTimeoutSeconds', seconds);
+                }
+                
+                console.log('會話超時時間已更新:', self.get('sessionTimeoutSeconds'), '秒');
+                
+                // 觸發 WebSocket 通知後端更新超時設定
+                if (window.MCPFeedback && window.MCPFeedback.app && window.MCPFeedback.app.webSocketManager) {
+                    window.MCPFeedback.app.webSocketManager.send({
+                        type: 'update_timeout_settings',
+                        settings: {
+                            enabled: self.get('sessionTimeoutEnabled'),
+                            seconds: self.get('sessionTimeoutSeconds')
+                        }
+                    });
+                }
             });
         }
 

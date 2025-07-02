@@ -8,11 +8,11 @@
 
 ## 🎯 Core Concept
 
-This is an [MCP server](https://modelcontextprotocol.io/) that establishes **feedback-oriented development workflows**, providing **Web UI and Desktop Application** dual interface options, perfectly adapting to local, **SSH Remote environments** (Cursor SSH Remote, VS Code Remote SSH), and **WSL (Windows Subsystem for Linux) environments**. By guiding AI to confirm with users rather than making speculative operations, it can consolidate multiple tool calls into a single feedback-oriented request, dramatically reducing platform costs and improving development efficiency.
+This is an [MCP server](https://modelcontextprotocol.io/) that establishes **feedback-oriented development workflows**, providing **Web UI and Desktop Application** dual interface options, perfectly adapting to local, **SSH Remote environments**, and **WSL (Windows Subsystem for Linux) environments**. By guiding AI to confirm with users rather than making speculative operations, it can consolidate multiple tool calls into a single feedback-oriented request, dramatically reducing platform costs and improving development efficiency.
 
 **🌐 Dual Interface Architecture Advantages:**
 - 🖥️ **Desktop Application**: Native cross-platform desktop experience, supporting Windows, macOS, Linux
-- 🌐 **Web UI Interface**: No GUI dependencies required, suitable for remote and WSL environments
+- 🌐 **Web UI**: No GUI dependencies required, suitable for remote and WSL environments
 - 🔧 **Flexible Deployment**: Choose the most suitable interface mode based on environment requirements
 - 📦 **Unified Functionality**: Both interfaces provide exactly the same functional experience
 
@@ -38,14 +38,16 @@ This is an [MCP server](https://modelcontextprotocol.io/) that establishes **fee
 
 ### 📝 Smart Workflow
 - **Prompt Management**: CRUD operations for common prompts, usage statistics, intelligent sorting
-- **Auto-Timed Submit**: 1-86400 second flexible timer, supports pause, resume, cancel
-- **Session Management & Tracking**: Local file storage, privacy controls, history export, real-time statistics
+- **Auto-Timed Submit**: 1-86400 second flexible timer, supports pause, resume, cancel with new pause/resume button controls
+- **Auto Command Execution** (v2.6.0): Automatically execute preset commands after creating new sessions or commits for improved development efficiency
+- **Session Management & Tracking**: Local file storage, privacy controls, history export (supports JSON, CSV, Markdown formats), real-time statistics, flexible timeout settings
 - **Connection Monitoring**: WebSocket status monitoring, auto-reconnection, quality indicators
 - **AI Work Summary Markdown Display**: Support for rich Markdown syntax rendering including headers, bold text, code blocks, lists, links and other formats for enhanced content readability
 
 ### 🎨 Modern Experience
 - **Responsive Design**: Adapts to different screen sizes, modular JavaScript architecture
 - **Audio Notifications**: Built-in multiple sound effects, custom audio upload support, volume control
+- **System Notifications** (v2.6.0): System-level real-time alerts for important events (like auto-commit, session timeout)
 - **Smart Memory**: Input box height memory, one-click copy, persistent settings
 - **Multi-language Support**: Traditional Chinese, English, Simplified Chinese, instant switching
 
@@ -59,7 +61,7 @@ This is an [MCP server](https://modelcontextprotocol.io/) that establishes **fee
 ### Web UI Interface (v2.5.0 - Desktop Application Support)
 
 <div align="center">
-  <img src="docs/en/images/web1.jpeg" width="400" alt="Web UI Main Interface - Prompt Management & Auto Submit" />
+  <img src="docs/en/images/web1.png" width="400" alt="Web UI Main Interface - Prompt Management & Auto Submit" />
 </div>
 
 <details>
@@ -92,9 +94,6 @@ This is an [MCP server](https://modelcontextprotocol.io/) that establishes **fee
 ```bash
 # Install uv (if not already installed)
 pip install uv
-
-# Quick test
-uvx mcp-feedback-enhanced@latest test
 ```
 
 ### 2. Configure MCP
@@ -122,7 +121,9 @@ uvx mcp-feedback-enhanced@latest test
       "timeout": 600,
       "env": {
         "MCP_DEBUG": "false",
-        "MCP_WEB_PORT": "8765"
+        "MCP_WEB_HOST": "127.0.0.1",
+        "MCP_WEB_PORT": "8765",
+        "MCP_LANGUAGE": "en"
       },
       "autoApprove": ["interactive_feedback"]
     }
@@ -140,6 +141,7 @@ uvx mcp-feedback-enhanced@latest test
       "timeout": 600,
       "env": {
         "MCP_DESKTOP_MODE": "true",
+        "MCP_WEB_HOST": "127.0.0.1",
         "MCP_WEB_PORT": "8765",
         "MCP_DEBUG": "false"
       },
@@ -159,11 +161,7 @@ For optimal results, add the following rules to your AI assistant:
 ```
 # MCP Interactive Feedback Rules
 
-1. During any process, task, or conversation, whether asking, replying, or completing phased tasks, you must call MCP mcp-feedback-enhanced.
-2. Whenever user feedback is received, if the feedback content is not empty, you must call MCP mcp-feedback-enhanced again and adjust behavior based on the feedback content.
-3. Only when the user explicitly indicates "end" or "no more interaction needed" can you stop calling MCP mcp-feedback-enhanced, and the process is considered complete.
-4. Unless receiving termination instructions, all steps must repeatedly call MCP mcp-feedback-enhanced.
-5. Before completing tasks, you must use the MCP mcp-feedback-enhanced tool to ask users for feedback.
+follow mcp-feedback-enhanced instructions
 ```
 
 ## ⚙️ Advanced Settings
@@ -172,8 +170,27 @@ For optimal results, add the following rules to your AI assistant:
 | Variable | Purpose | Values | Default |
 |----------|---------|--------|---------|
 | `MCP_DEBUG` | Debug mode | `true`/`false` | `false` |
+| `MCP_WEB_HOST` | Web UI host binding | IP address or hostname | `127.0.0.1` |
 | `MCP_WEB_PORT` | Web UI port | `1024-65535` | `8765` |
 | `MCP_DESKTOP_MODE` | Desktop application mode | `true`/`false` | `false` |
+| `MCP_LANGUAGE` | Force UI language | `zh-TW`/`zh-CN`/`en` | Auto-detect |
+
+**`MCP_WEB_HOST` Explanation**:
+- `127.0.0.1` (default): Local access only, higher security
+- `0.0.0.0`: Allow remote access, suitable for SSH remote development environments
+
+**`MCP_LANGUAGE` Explanation**:
+- Used to force the interface language, overriding automatic system detection
+- Supported language codes:
+  - `zh-TW`: Traditional Chinese
+  - `zh-CN`: Simplified Chinese
+  - `en`: English
+- Language detection priority:
+  1. User-saved language settings in the interface (highest priority)
+  2. `MCP_LANGUAGE` environment variable
+  3. System environment variables (LANG, LC_ALL, etc.)
+  4. System default language
+  5. Fallback to default language (Traditional Chinese)
 
 ### Testing Options
 ```bash
@@ -186,6 +203,11 @@ uvx mcp-feedback-enhanced@latest test --desktop # Test desktop application (v2.5
 
 # Debug mode
 MCP_DEBUG=true uvx mcp-feedback-enhanced@latest test
+
+# Specify language for testing
+MCP_LANGUAGE=en uvx mcp-feedback-enhanced@latest test --web    # Force English interface
+MCP_LANGUAGE=zh-TW uvx mcp-feedback-enhanced@latest test --web  # Force Traditional Chinese
+MCP_LANGUAGE=zh-CN uvx mcp-feedback-enhanced@latest test --web  # Force Simplified Chinese
 ```
 
 ### Developer Installation
@@ -231,23 +253,51 @@ make quick-check                                        # Quick check and auto-f
 
 ## 🆕 Version History
 
-📋 **Complete Version History:** [RELEASE_NOTES/CHANGELOG.md](RELEASE_NOTES/CHANGELOG.md)
+📋 **Complete Version History:** [RELEASE_NOTES/CHANGELOG.en.md](RELEASE_NOTES/CHANGELOG.en.md)
 
-### Latest Version Highlights (v2.5.0)
-- 🖥️ **Desktop Application**: Brand new cross-platform desktop application supporting Windows, macOS, Linux
-- 📋 **AI Work Summary Markdown Display**: Support for Markdown syntax rendering including headers, bold text, code blocks, lists, links and other formats
-- ⚡ **Significant Performance Enhancement**: Introduced debounce/throttle mechanisms to reduce unnecessary rendering and network requests
-- 📊 **Session History Storage Improvement**: Migrated from localStorage to server-side local file storage
-- 🌐 **Network Connection Stability**: Improved WebSocket reconnection mechanism with network status detection
-- 🎨 **UI Rendering Optimization**: Optimized rendering performance for session management, statistics, and status indicators
-- 🛠️ **Build Process Optimization**: Added Makefile desktop application build commands and development tools
-- 📚 **Documentation Enhancement**: Added desktop application build guide and workflow documentation
+### Latest Version Highlights (v2.6.0)
+- 🚀 **Auto Command Execution**: Automatically execute preset commands after creating new sessions or commits, improving workflow efficiency
+- 📊 **Session Export Feature**: Support exporting session records to multiple formats for easy sharing and archiving
+- ⏸️ **Auto-commit Control**: Added pause and resume buttons for better control over auto-commit timing
+- 🔔 **System Notifications**: System-level notifications for important events with real-time alerts
+- ⏱️ **Session Timeout Optimization**: Redesigned session management with more flexible configuration options
+- 🌏 **I18n Enhancement**: Refactored internationalization architecture with full multilingual support for notifications
+- 🎨 **UI Simplification**: Significantly simplified user interface for improved user experience
 
 ## 🐛 Common Issues
 
 ### 🌐 SSH Remote Environment Issues
-**Q: Browser cannot launch in SSH Remote environment**
-A: This is normal. SSH Remote environments have no graphical interface, requiring manual opening in local browser. For detailed solutions, refer to: [SSH Remote Environment Usage Guide](docs/en/ssh-remote/browser-launch-issues.md)
+**Q: Browser cannot launch or access in SSH Remote environment**
+A: Two solutions available:
+
+**Solution 1: Environment Variable Setting (v2.5.5 Recommended)**
+Set `"MCP_WEB_HOST": "0.0.0.0"` in MCP configuration to allow remote access:
+```json
+{
+  "mcpServers": {
+    "mcp-feedback-enhanced": {
+      "command": "uvx",
+      "args": ["mcp-feedback-enhanced@latest"],
+      "timeout": 600,
+      "env": {
+        "MCP_WEB_HOST": "0.0.0.0",
+        "MCP_WEB_PORT": "8765"
+      },
+      "autoApprove": ["interactive_feedback"]
+    }
+  }
+}
+```
+Then open in local browser: `http://[remote-host-IP]:8765`
+
+**Solution 2: SSH Port Forwarding (Traditional Method)**
+1. Use default configuration (`MCP_WEB_HOST`: `127.0.0.1`)
+2. Set up SSH port forwarding:
+   - **VS Code Remote SSH**: Press `Ctrl+Shift+P` → "Forward a Port" → Enter `8765`
+   - **Cursor SSH Remote**: Manually add port forwarding rule (port 8765)
+3. Open in local browser: `http://localhost:8765`
+
+For detailed solutions, refer to: [SSH Remote Environment Usage Guide](docs/en/ssh-remote/browser-launch-issues.md)
 
 **Q: Why am I not receiving new MCP feedback?**
 A: Likely a WebSocket connection issue. **Solution**: Directly refresh the browser page.
@@ -340,6 +390,15 @@ If you find it useful, please:
 ### Contributors
 **penn201500** - [GitHub @penn201500](https://github.com/penn201500)
 - 🎯 Auto-focus input box feature ([PR #39](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/39))
+
+**leo108** - [GitHub @leo108](https://github.com/leo108)
+- 🌐 SSH Remote Development Support (`MCP_WEB_HOST` environment variable) ([PR #113](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/113))
+
+**Alsan** - [GitHub @Alsan](https://github.com/Alsan)
+- 🍎 macOS PyO3 Compilation Configuration Support ([PR #93](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/93))
+
+**fireinice** - [GitHub @fireinice](https://github.com/fireinice)
+- 📝 Tool Documentation Optimization (LLM instructions moved to docstring) ([PR #105](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/105))
 
 ### Community Support
 - **Discord:** [https://discord.gg/Gur2V67](https://discord.gg/Gur2V67)

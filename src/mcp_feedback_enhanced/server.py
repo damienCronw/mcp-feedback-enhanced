@@ -434,28 +434,22 @@ async def interactive_feedback(
     ] = "我已完成了您請求的任務。",
     timeout: Annotated[int, Field(description="等待用戶回饋的超時時間（秒）")] = 600,
 ) -> list:
-    """
-    收集用戶的互動回饋，支援文字和圖片
+    """Interactive feedback collection tool for LLM agents.
 
-    此工具使用 Web UI 介面收集用戶回饋，支援智能環境檢測。
-
-    用戶可以：
-    1. 執行命令來驗證結果
-    2. 提供文字回饋
-    3. 上傳圖片作為回饋
-    4. 查看 AI 的工作摘要
-
-    調試模式：
-    - 設置環境變數 MCP_DEBUG=true 可啟用詳細調試輸出
-    - 生產環境建議關閉調試模式以避免輸出干擾
+    USAGE RULES:
+    1. During any process, task, or conversation, whether asking, replying, or completing phased tasks, you must call this tool to ask for feedback.
+    2. Unless receiving termination instructions, all steps must repeatedly call this tool.
+    3. Whenever user feedback is received, if the feedback content is not empty, you must call this tool again and adjust behavior based on the feedback content.
+    4. Only when the user explicitly indicates "end" or "no more interaction needed" can you stop calling this tool, and the process is considered complete.
+    5. You should summarize what have done, and provide project directory through args to let user know what you have done to provide feedback for next step.
 
     Args:
-        project_directory: 專案目錄路徑
-        summary: AI 工作完成的摘要說明
-        timeout: 等待用戶回饋的超時時間（秒），預設為 600 秒（10 分鐘）
+        project_directory: Project directory path for context
+        summary: Summary of AI work completed for user review
+        timeout: Timeout in seconds for waiting user feedback (default: 600 seconds)
 
     Returns:
-        List: 包含 TextContent 和 MCPImage 對象的列表
+        list: List containing TextContent and MCPImage objects representing user feedback
     """
     # 環境偵測
     is_remote = is_remote_environment()
@@ -599,7 +593,22 @@ def get_system_info() -> str:
 
 # ===== 主程式入口 =====
 def main():
-    """主要入口點，用於套件執行"""
+    """主要入口點，用於套件執行
+    收集用戶的互動回饋，支援文字和圖片
+    此工具使用 Web UI 介面收集用戶回饋，支援智能環境檢測。
+
+    用戶可以：
+    1. 執行命令來驗證結果
+    2. 提供文字回饋
+    3. 上傳圖片作為回饋
+    4. 查看 AI 的工作摘要
+
+    調試模式：
+    - 設置環境變數 MCP_DEBUG=true 可啟用詳細調試輸出
+    - 生產環境建議關閉調試模式以避免輸出干擾
+
+
+    """
     # 檢查是否啟用調試模式
     debug_enabled = os.getenv("MCP_DEBUG", "").lower() in ("true", "1", "yes", "on")
 

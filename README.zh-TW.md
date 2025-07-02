@@ -38,20 +38,22 @@
 
 ### 📝 智能工作流程
 - **提示詞管理**：常用提示詞的 CRUD 操作、使用統計、智能排序
-- **自動定時提交**：1-86400 秒彈性計時器，支援暫停、恢復、取消
-- **會話管理追蹤**：本地檔案存儲、隱私控制、歷史匯出、即時統計
+- **自動定時提交**：1-86400 秒彈性計時器，支援暫停、恢復、取消，新增暫停/開始按鈕控制
+- **自動執行命令**（v2.6.0）：新建會話和提交後可自動執行預設命令，提升開發效率
+- **會話管理追蹤**：本地檔案存儲、隱私控制、歷史匯出（支援 JSON、CSV、Markdown 格式）、即時統計、彈性超時設定
 - **連線監控**：WebSocket 狀態監控、自動重連、品質指示
 - **AI 工作摘要 Markdown 顯示**：支援豐富的 Markdown 語法渲染，包含標題、粗體、程式碼區塊、列表、連結等格式，提升內容可讀性
 
 ### 🎨 現代化體驗
 - **響應式設計**：適配不同螢幕尺寸，模組化 JavaScript 架構
 - **音效通知**：內建多種音效、支援自訂音效上傳、音量控制
+- **系統通知**（v2.6.0）：重要事件（如自動提交、會話超時等）的系統級即時提醒
 - **智能記憶**：輸入框高度記憶、一鍵複製、設定持久化
 - **多語言支援**：繁體中文、英文、簡體中文，即時切換
 
 ### 🖼️ 圖片與媒體
 - **全格式支援**：PNG、JPG、JPEG、GIF、BMP、WebP
-- **便捷上傳**：拖拽檔案、剪貼板粘貼（Ctrl+V）
+- **便捷上傳**：拖拽檔案、剪貼板貼上（Ctrl+V）
 - **無限制處理**：支援任意大小圖片，自動智能處理
 
 ## 🌐 介面預覽
@@ -59,7 +61,7 @@
 ### Web UI 介面（v2.5.0 - 支援桌面應用程式）
 
 <div align="center">
-  <img src="docs/zh-TW/images/web1.jpeg" width="400" alt="Web UI 主介面 - 提示詞管理與自動提交" />
+  <img src="docs/zh-TW/images/web1.png" width="400" alt="Web UI 主介面 - 提示詞管理與自動提交" />
 </div>
 
 <details>
@@ -83,7 +85,7 @@
 
 **快捷鍵支援**
 - `Ctrl+Enter`（Windows/Linux）/ `Cmd+Enter`（macOS）：提交回饋（主鍵盤與數字鍵盤皆支援）
-- `Ctrl+V`（Windows/Linux）/ `Cmd+V`（macOS）：直接粘貼剪貼板圖片
+- `Ctrl+V`（Windows/Linux）/ `Cmd+V`（macOS）：直接貼上剪貼板圖片
 - `Ctrl+I`（Windows/Linux）/ `Cmd+I`（macOS）：快速聚焦輸入框 (感謝 @penn201500)
 
 ## 🚀 快速開始
@@ -92,9 +94,6 @@
 ```bash
 # 安裝 uv（如果尚未安裝）
 pip install uv
-
-# 快速測試
-uvx mcp-feedback-enhanced@latest test
 ```
 
 ### 2. 配置 MCP
@@ -122,7 +121,9 @@ uvx mcp-feedback-enhanced@latest test
       "timeout": 600,
       "env": {
         "MCP_DEBUG": "false",
-        "MCP_WEB_PORT": "8765"
+        "MCP_WEB_HOST": "127.0.0.1",
+        "MCP_WEB_PORT": "8765",
+        "MCP_LANGUAGE": "zh-TW"
       },
       "autoApprove": ["interactive_feedback"]
     }
@@ -140,6 +141,7 @@ uvx mcp-feedback-enhanced@latest test
       "timeout": 600,
       "env": {
         "MCP_DESKTOP_MODE": "true",
+        "MCP_WEB_HOST": "127.0.0.1",
         "MCP_WEB_PORT": "8765",
         "MCP_DEBUG": "false"
       },
@@ -159,21 +161,36 @@ uvx mcp-feedback-enhanced@latest test
 ```
 # MCP Interactive Feedback 規則
 
-1. 在任何流程、任務、對話進行時，無論是詢問、回覆、或完成階段性任務，皆必須呼叫 MCP mcp-feedback-enhanced。
-2. 每當收到使用者回饋，若回饋內容非空，必須再次呼叫 MCP mcp-feedback-enhanced，並根據回饋內容調整行為。
-3. 僅當使用者明確表示「結束」或「不再需要互動」時，才可停止呼叫 MCP mcp-feedback-enhanced，流程才算結束。
-4. 除非收到結束指令，否則所有步驟都必須重複呼叫 MCP mcp-feedback-enhanced。
-5. 完成任務前，必須使用 MCP mcp-feedback-enhanced 工具向使用者詢問回饋。
+注意在任務完成前根據mcp-feedback-enhanced工具的要求進行工具調用
 ```
 
 ## ⚙️ 進階設定
 
 ### 環境變數
-| 變數 | 用途 | 值 | 默認 |
+| 變數 | 用途 | 值 | 預設 |
 |------|------|-----|------|
 | `MCP_DEBUG` | 調試模式 | `true`/`false` | `false` |
+| `MCP_WEB_HOST` | Web UI 主機綁定 | IP 地址或主機名 | `127.0.0.1` |
 | `MCP_WEB_PORT` | Web UI 端口 | `1024-65535` | `8765` |
 | `MCP_DESKTOP_MODE` | 桌面應用程式模式 | `true`/`false` | `false` |
+| `MCP_LANGUAGE` | 強制指定介面語言 | `zh-TW`/`zh-CN`/`en` | 自動偵測 |
+
+**`MCP_WEB_HOST` 說明**：
+- `127.0.0.1`（預設）：僅本地存取，安全性較高
+- `0.0.0.0`：允許遠端存取，適用於 SSH 遠端開發環境
+
+**`MCP_LANGUAGE` 說明**：
+- 用於強制指定介面語言，覆蓋系統自動偵測
+- 支援的語言代碼：
+  - `zh-TW`：繁體中文
+  - `zh-CN`：簡體中文  
+  - `en`：英文
+- 語言偵測優先順序：
+  1. 用戶在介面中保存的語言設定（最高優先級）
+  2. `MCP_LANGUAGE` 環境變數
+  3. 系統環境變數（LANG、LC_ALL 等）
+  4. 系統預設語言
+  5. 回退到預設語言（繁體中文）
 
 ### 測試選項
 ```bash
@@ -186,6 +203,11 @@ uvx mcp-feedback-enhanced@latest test --desktop # 測試桌面應用程式 (v2.5
 
 # 調試模式
 MCP_DEBUG=true uvx mcp-feedback-enhanced@latest test
+
+# 指定語言測試
+MCP_LANGUAGE=en uvx mcp-feedback-enhanced@latest test --web    # 強制使用英文介面
+MCP_LANGUAGE=zh-TW uvx mcp-feedback-enhanced@latest test --web  # 強制使用繁體中文
+MCP_LANGUAGE=zh-CN uvx mcp-feedback-enhanced@latest test --web  # 強制使用簡體中文
 ```
 
 ### 開發者安裝
@@ -234,21 +256,49 @@ make quick-check                                        # 快速檢查並自動�
 
 📋 **完整版本更新記錄：** [RELEASE_NOTES/CHANGELOG.zh-TW.md](RELEASE_NOTES/CHANGELOG.zh-TW.md)
 
-### 最新版本亮點（v2.5.0）
-- 🖥️ **桌面應用程式**: 全新跨平台桌面應用，支援 Windows、macOS、Linux
-- 📋 **AI 工作摘要 Markdown 顯示**: 支援 Markdown 語法渲染，包含標題、粗體、程式碼區塊、列表、連結等格式
-- ⚡ **效能大幅提升**: 引入防抖/節流機制，減少不必要的渲染和網路請求
-- 📊 **會話歷史存儲改進**: 從 localStorage 改為伺服器端本地檔案存儲
-- 🌐 **網路連接穩定性**: 改進 WebSocket 重連機制，支援網路狀態檢測
-- 🎨 **UI 渲染優化**: 優化會話管理、統計資訊、狀態指示器的渲染效能
-- 🛠️ **構建流程優化**: 新增 Makefile 桌面應用構建命令和開發工具
-- 📚 **文檔完善**: 新增桌面應用構建指南和工作流程說明
+### 最新版本亮點（v2.6.0）
+- 🚀 **自動執行命令**: 新建會話和提交後可自動執行預設命令，提升工作效率
+- 📊 **會話匯出功能**: 支援將會話記錄匯出為多種格式，方便分享和存檔
+- ⏸️ **自動提交控制**: 新增暫停和開始按鈕，讓使用者更好控制自動提交時機
+- 🔔 **系統通知**: 新增系統級通知功能，重要事件即時提醒
+- ⏱️ **會話超時機制優化**: 重新設計會話管理，提供更彈性的設定選項
+- 🌏 **多語系強化**: 重構多語系架構，通知系統也完整支援多語言
+- 🎨 **介面簡化**: 大幅簡化使用者介面，提升使用體驗
 
 ## 🐛 常見問題
 
 ### 🌐 SSH Remote 環境問題
-**Q: SSH Remote 環境下瀏覽器無法啟動**
-A: 這是正常現象。SSH Remote 環境沒有圖形界面，需要手動在本地瀏覽器開啟。詳細解決方案請參考：[SSH Remote 環境使用指南](docs/zh-TW/ssh-remote/browser-launch-issues.md)
+**Q: SSH Remote 環境下瀏覽器無法啟動或無法存取**
+A: 提供兩種解決方案：
+
+**方案一：環境變數設定（v2.5.5 推薦）**
+在 MCP 配置中設定 `"MCP_WEB_HOST": "0.0.0.0"` 允許遠端存取：
+```json
+{
+  "mcpServers": {
+    "mcp-feedback-enhanced": {
+      "command": "uvx",
+      "args": ["mcp-feedback-enhanced@latest"],
+      "timeout": 600,
+      "env": {
+        "MCP_WEB_HOST": "0.0.0.0",
+        "MCP_WEB_PORT": "8765"
+      },
+      "autoApprove": ["interactive_feedback"]
+    }
+  }
+}
+```
+然後在本地瀏覽器開啟：`http://[遠端主機IP]:8765`
+
+**方案二：SSH 端口轉發（傳統方法）**
+1. 使用預設配置（`MCP_WEB_HOST`: `127.0.0.1`）
+2. 設定 SSH 端口轉發：
+   - **VS Code Remote SSH**: 按 `Ctrl+Shift+P` → "Forward a Port" → 輸入 `8765`
+   - **Cursor SSH Remote**: 手動添加端口轉發規則（端口 8765）
+3. 在本地瀏覽器開啟：`http://localhost:8765`
+
+詳細解決方案請參考：[SSH Remote 環境使用指南](docs/zh-TW/ssh-remote/browser-launch-issues.md)
 
 **Q: 為什麼沒有接收到 MCP 新的反饋？**
 A: 可能是 WebSocket 連接問題。**解決方法**：直接重新整理瀏覽器頁面。
@@ -341,6 +391,15 @@ A: 各種 AI 模型（包括 Gemini Pro 2.5、Claude 等）在圖片解析上可
 ### 貢獻者
 **penn201500** - [GitHub @penn201500](https://github.com/penn201500)
 - 🎯 自動聚焦輸入框功能 ([PR #39](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/39))
+
+**leo108** - [GitHub @leo108](https://github.com/leo108)
+- 🌐 SSH 遠端開發支援 (`MCP_WEB_HOST` 環境變數) ([PR #113](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/113))
+
+**Alsan** - [GitHub @Alsan](https://github.com/Alsan)
+- 🍎 macOS PyO3 編譯配置支援 ([PR #93](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/93))
+
+**fireinice** - [GitHub @fireinice](https://github.com/fireinice)
+- 📝 工具文檔優化 (LLM 指令移至 docstring) ([PR #105](https://github.com/Minidoracat/mcp-feedback-enhanced/pull/105))
 
 ### 社群支援
 - **Discord：** [https://discord.gg/Gur2V67](https://discord.gg/Gur2V67)

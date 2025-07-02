@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from ... import __version__
 from ...debug import web_debug_log as debug_log
+from ..constants import get_message_code as get_msg_code
 
 
 if TYPE_CHECKING:
@@ -42,6 +43,11 @@ def load_user_layout_settings() -> str:
     except Exception as e:
         debug_log(f"載入佈局設定失敗: {e}，使用預設佈局模式: combined-vertical")
         return "combined-vertical"
+
+
+# 使用統一的訊息代碼系統
+# 從 ..constants 導入的 get_msg_code 函數會處理所有訊息代碼
+# 舊的 key 會自動映射到新的常量
 
 
 def setup_routes(manager: "WebUIManager"):
@@ -79,7 +85,6 @@ def setup_routes(manager: "WebUIManager"):
                 "version": __version__,
                 "has_session": True,
                 "layout_mode": layout_mode,
-                "i18n": manager.i18n,
             },
         )
 
@@ -113,16 +118,23 @@ def setup_routes(manager: "WebUIManager"):
         return JSONResponse(content=translations)
 
     @manager.app.get("/api/session-status")
-    async def get_session_status():
+    async def get_session_status(request: Request):
         """獲取當前會話狀態"""
         current_session = manager.get_current_session()
+
+        # 從請求頭獲取客戶端語言
+        lang = (
+            request.headers.get("Accept-Language", "zh-TW").split(",")[0].split("-")[0]
+        )
+        if lang == "zh":
+            lang = "zh-TW"
 
         if not current_session:
             return JSONResponse(
                 content={
                     "has_session": False,
                     "status": "no_session",
-                    "message": "沒有活躍會話",
+                    "messageCode": get_msg_code("no_active_session"),
                 }
             )
 
@@ -139,12 +151,20 @@ def setup_routes(manager: "WebUIManager"):
         )
 
     @manager.app.get("/api/current-session")
-    async def get_current_session():
+    async def get_current_session(request: Request):
         """獲取當前會話詳細信息"""
         current_session = manager.get_current_session()
 
+        # 從查詢參數獲取語言，如果沒有則從會話獲取，最後使用默認值
+
         if not current_session:
-            return JSONResponse(status_code=404, content={"error": "沒有活躍會話"})
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "No active session",
+                    "messageCode": get_msg_code("no_active_session"),
+                },
+            )
 
         return JSONResponse(
             content={
@@ -157,16 +177,97 @@ def setup_routes(manager: "WebUIManager"):
             }
         )
 
+    @manager.app.get("/api/all-sessions")
+    async def get_all_sessions(request: Request):
+        """獲取所有會話的實時狀態"""
+
+        try:
+            sessions_data = []
+
+            # 獲取所有會話的實時狀態
+            for session_id, session in manager.sessions.items():
+                session_info = {
+                    "session_id": session.session_id,
+                    "project_directory": session.project_directory,
+                    "summary": session.summary,
+                    "status": session.status.value,
+                    "status_message": session.status_message,
+                    "created_at": int(session.created_at * 1000),  # 轉換為毫秒
+                    "last_activity": int(session.last_activity * 1000),
+                    "feedback_completed": session.feedback_completed.is_set(),
+                    "has_websocket": session.websocket is not None,
+                    "is_current": session == manager.current_session,
+                    "user_messages": session.user_messages,  # 包含用戶消息記錄
+                }
+                sessions_data.append(session_info)
+
+            # 按創建時間排序（最新的在前）
+            sessions_data.sort(key=lambda x: x["created_at"], reverse=True)
+
+            debug_log(f"返回 {len(sessions_data)} 個會話的實時狀態")
+            return JSONResponse(content={"sessions": sessions_data})
+
+        except Exception as e:
+            debug_log(f"獲取所有會話狀態失敗: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": f"Failed to get sessions: {e!s}",
+                    "messageCode": get_msg_code("get_sessions_failed"),
+                },
+            )
+
+    @manager.app.post("/api/add-user-message")
+    async def add_user_message(request: Request):
+        """添加用戶消息到當前會話"""
+
+        try:
+            data = await request.json()
+            current_session = manager.get_current_session()
+
+            if not current_session:
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": "No active session",
+                        "messageCode": get_msg_code("no_active_session"),
+                    },
+                )
+
+            # 添加用戶消息到會話
+            current_session.add_user_message(data)
+
+            debug_log(f"用戶消息已添加到會話 {current_session.session_id}")
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "messageCode": get_msg_code("user_message_recorded"),
+                }
+            )
+
+        except Exception as e:
+            debug_log(f"添加用戶消息失敗: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": f"Failed to add user message: {e!s}",
+                    "messageCode": get_msg_code("add_user_message_failed"),
+                },
+            )
+
     @manager.app.websocket("/ws")
-    async def websocket_endpoint(websocket: WebSocket):
+    async def websocket_endpoint(websocket: WebSocket, lang: str = "zh-TW"):
         """WebSocket 端點 - 重構後移除 session_id 依賴"""
         # 獲取當前活躍會話
         session = manager.get_current_session()
         if not session:
-            await websocket.close(code=4004, reason="沒有活躍會話")
+            await websocket.close(code=4004, reason="No active session")
             return
 
         await websocket.accept()
+
+        # 語言由前端處理，不需要在後端設置
+        debug_log(f"WebSocket 連接建立，語言由前端處理: {lang}")
 
         # 檢查會話是否已有 WebSocket 連接
         if session.websocket and session.websocket != websocket:
@@ -178,7 +279,10 @@ def setup_routes(manager: "WebUIManager"):
         # 發送連接成功消息
         try:
             await websocket.send_json(
-                {"type": "connection_established", "message": "WebSocket 連接已建立"}
+                {
+                    "type": "connection_established",
+                    "messageCode": get_msg_code("websocket_connected"),
+                }
             )
 
             # 檢查是否有待發送的會話更新
@@ -187,7 +291,8 @@ def setup_routes(manager: "WebUIManager"):
                 await websocket.send_json(
                     {
                         "type": "session_updated",
-                        "message": "新會話已創建，正在更新頁面內容",
+                        "action": "new_session_created",
+                        "messageCode": get_msg_code("new_session_created"),
                         "session_info": {
                             "project_directory": session.project_directory,
                             "summary": session.summary,
@@ -236,6 +341,7 @@ def setup_routes(manager: "WebUIManager"):
     @manager.app.post("/api/save-settings")
     async def save_settings(request: Request):
         """保存設定到檔案"""
+
         try:
             data = await request.json()
 
@@ -250,18 +356,28 @@ def setup_routes(manager: "WebUIManager"):
 
             debug_log(f"設定已保存到: {settings_file}")
 
-            return JSONResponse(content={"status": "success", "message": "設定已保存"})
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "messageCode": get_msg_code("settings_saved"),
+                }
+            )
 
         except Exception as e:
             debug_log(f"保存設定失敗: {e}")
             return JSONResponse(
                 status_code=500,
-                content={"status": "error", "message": f"保存失敗: {e!s}"},
+                content={
+                    "status": "error",
+                    "message": f"Save failed: {e!s}",
+                    "messageCode": get_msg_code("save_failed"),
+                },
             )
 
     @manager.app.get("/api/load-settings")
-    async def load_settings():
+    async def load_settings(request: Request):
         """從檔案載入設定"""
+
         try:
             # 使用統一的設定檔案路徑
             config_dir = Path.home() / ".config" / "mcp-feedback-enhanced"
@@ -280,12 +396,17 @@ def setup_routes(manager: "WebUIManager"):
             debug_log(f"載入設定失敗: {e}")
             return JSONResponse(
                 status_code=500,
-                content={"status": "error", "message": f"載入失敗: {e!s}"},
+                content={
+                    "status": "error",
+                    "message": f"Load failed: {e!s}",
+                    "messageCode": get_msg_code("load_failed"),
+                },
             )
 
     @manager.app.post("/api/clear-settings")
-    async def clear_settings():
+    async def clear_settings(request: Request):
         """清除設定檔案"""
+
         try:
             # 使用統一的設定檔案路徑
             config_dir = Path.home() / ".config" / "mcp-feedback-enhanced"
@@ -297,18 +418,28 @@ def setup_routes(manager: "WebUIManager"):
             else:
                 debug_log("設定檔案不存在，無需刪除")
 
-            return JSONResponse(content={"status": "success", "message": "設定已清除"})
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "messageCode": get_msg_code("settings_cleared"),
+                }
+            )
 
         except Exception as e:
             debug_log(f"清除設定失敗: {e}")
             return JSONResponse(
                 status_code=500,
-                content={"status": "error", "message": f"清除失敗: {e!s}"},
+                content={
+                    "status": "error",
+                    "message": f"Clear failed: {e!s}",
+                    "messageCode": get_msg_code("clear_failed"),
+                },
             )
 
     @manager.app.get("/api/load-session-history")
-    async def load_session_history():
+    async def load_session_history(request: Request):
         """從檔案載入會話歷史"""
+
         try:
             # 使用統一的設定檔案路徑
             config_dir = Path.home() / ".config" / "mcp-feedback-enhanced"
@@ -330,7 +461,7 @@ def setup_routes(manager: "WebUIManager"):
                     sessions = history_data if isinstance(history_data, list) else []
                     last_cleanup = 0
 
-                # 回傳與 localStorage 格式相容的資料
+                # 回傳會話歷史資料
                 return JSONResponse(
                     content={"sessions": sessions, "lastCleanup": last_cleanup}
                 )
@@ -342,12 +473,17 @@ def setup_routes(manager: "WebUIManager"):
             debug_log(f"載入會話歷史失敗: {e}")
             return JSONResponse(
                 status_code=500,
-                content={"status": "error", "message": f"載入失敗: {e!s}"},
+                content={
+                    "status": "error",
+                    "message": f"Load failed: {e!s}",
+                    "messageCode": get_msg_code("load_failed"),
+                },
             )
 
     @manager.app.post("/api/save-session-history")
     async def save_session_history(request: Request):
         """保存會話歷史到檔案"""
+
         try:
             data = await request.json()
 
@@ -364,11 +500,6 @@ def setup_routes(manager: "WebUIManager"):
                 "savedAt": int(time.time() * 1000),  # 當前時間戳
             }
 
-            # 如果是首次儲存且有 localStorage 遷移標記
-            if not history_file.exists() and data.get("migratedFrom") == "localStorage":
-                history_data["migratedFrom"] = "localStorage"
-                history_data["migratedAt"] = int(time.time() * 1000)
-
             # 保存會話歷史到檔案
             with open(history_file, "w", encoding="utf-8") as f:
                 json.dump(history_data, f, ensure_ascii=False, indent=2)
@@ -380,7 +511,8 @@ def setup_routes(manager: "WebUIManager"):
             return JSONResponse(
                 content={
                     "status": "success",
-                    "message": f"會話歷史已保存（{session_count} 個會話）",
+                    "messageCode": get_msg_code("session_history_saved"),
+                    "params": {"count": session_count},
                 }
             )
 
@@ -388,82 +520,99 @@ def setup_routes(manager: "WebUIManager"):
             debug_log(f"保存會話歷史失敗: {e}")
             return JSONResponse(
                 status_code=500,
-                content={"status": "error", "message": f"保存失敗: {e!s}"},
+                content={
+                    "status": "error",
+                    "message": f"Save failed: {e!s}",
+                    "messageCode": get_msg_code("save_failed"),
+                },
             )
 
-    @manager.app.get("/api/active-tabs")
-    async def get_active_tabs():
-        """獲取活躍標籤頁信息 - 優先使用全局狀態"""
-        current_time = time.time()
-        expired_threshold = 60
+    @manager.app.get("/api/log-level")
+    async def get_log_level(request: Request):
+        """獲取日誌等級設定"""
 
-        # 清理過期的全局標籤頁
-        valid_global_tabs = {}
-        for tab_id, tab_info in manager.global_active_tabs.items():
-            if current_time - tab_info.get("last_seen", 0) <= expired_threshold:
-                valid_global_tabs[tab_id] = tab_info
+        try:
+            # 使用統一的設定檔案路徑
+            config_dir = Path.home() / ".config" / "mcp-feedback-enhanced"
+            settings_file = config_dir / "ui_settings.json"
 
-        manager.global_active_tabs = valid_global_tabs
+            if settings_file.exists():
+                with open(settings_file, encoding="utf-8") as f:
+                    settings_data = json.load(f)
+                    log_level = settings_data.get("logLevel", "INFO")
+                    debug_log(f"從設定檔案載入日誌等級: {log_level}")
+                    return JSONResponse(content={"logLevel": log_level})
+            else:
+                # 預設日誌等級
+                default_log_level = "INFO"
+                debug_log(f"使用預設日誌等級: {default_log_level}")
+                return JSONResponse(content={"logLevel": default_log_level})
 
-        # 如果有當前會話，也更新會話的標籤頁狀態
-        current_session = manager.get_current_session()
-        if current_session:
-            # 合併會話標籤頁到全局（如果有的話）
-            session_tabs = getattr(current_session, "active_tabs", {})
-            for tab_id, tab_info in session_tabs.items():
-                if current_time - tab_info.get("last_seen", 0) <= expired_threshold:
-                    valid_global_tabs[tab_id] = tab_info
+        except Exception as e:
+            debug_log(f"獲取日誌等級失敗: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": f"Failed to get log level: {e!s}",
+                    "messageCode": get_msg_code("get_log_level_failed"),
+                },
+            )
 
-            # 更新會話的活躍標籤頁
-            current_session.active_tabs = valid_global_tabs.copy()
-            manager.global_active_tabs = valid_global_tabs
+    @manager.app.post("/api/log-level")
+    async def set_log_level(request: Request):
+        """設定日誌等級"""
 
-        return JSONResponse(
-            content={
-                "has_session": current_session is not None,
-                "active_tabs": valid_global_tabs,
-                "count": len(valid_global_tabs),
-            }
-        )
-
-    @manager.app.post("/api/register-tab")
-    async def register_tab(request: Request):
-        """註冊新標籤頁"""
         try:
             data = await request.json()
-            tab_id = data.get("tabId")
+            log_level = data.get("logLevel")
 
-            if not tab_id:
-                return JSONResponse(status_code=400, content={"error": "缺少 tabId"})
+            if not log_level or log_level not in ["DEBUG", "INFO", "WARN", "ERROR"]:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Invalid log level",
+                        "messageCode": get_msg_code("invalid_log_level"),
+                    },
+                )
 
-            current_session = manager.get_current_session()
-            if not current_session:
-                return JSONResponse(status_code=404, content={"error": "沒有活躍會話"})
+            # 使用統一的設定檔案路徑
+            config_dir = Path.home() / ".config" / "mcp-feedback-enhanced"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            settings_file = config_dir / "ui_settings.json"
 
-            # 註冊標籤頁
-            tab_info = {
-                "timestamp": time.time() * 1000,  # 毫秒時間戳
-                "last_seen": time.time(),
-                "registered_at": time.time(),
-            }
+            # 載入現有設定或創建新設定
+            settings_data = {}
+            if settings_file.exists():
+                with open(settings_file, encoding="utf-8") as f:
+                    settings_data = json.load(f)
 
-            if not hasattr(current_session, "active_tabs"):
-                current_session.active_tabs = {}
+            # 更新日誌等級
+            settings_data["logLevel"] = log_level
 
-            current_session.active_tabs[tab_id] = tab_info
+            # 保存設定到檔案
+            with open(settings_file, "w", encoding="utf-8") as f:
+                json.dump(settings_data, f, ensure_ascii=False, indent=2)
 
-            # 同時更新全局標籤頁狀態
-            manager.global_active_tabs[tab_id] = tab_info
-
-            debug_log(f"標籤頁已註冊: {tab_id}")
+            debug_log(f"日誌等級已設定為: {log_level}")
 
             return JSONResponse(
-                content={"status": "success", "tabId": tab_id, "registered": True}
+                content={
+                    "status": "success",
+                    "logLevel": log_level,
+                    "messageCode": get_msg_code("log_level_updated"),
+                }
             )
 
         except Exception as e:
-            debug_log(f"註冊標籤頁失敗: {e}")
-            return JSONResponse(status_code=500, content={"error": f"註冊失敗: {e!s}"})
+            debug_log(f"設定日誌等級失敗: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Set failed: {e!s}",
+                    "messageCode": get_msg_code("set_failed"),
+                },
+            )
 
 
 async def handle_websocket_message(manager: "WebUIManager", session, data: dict):
@@ -494,20 +643,10 @@ async def handle_websocket_message(manager: "WebUIManager", session, data: dict)
                 debug_log(f"發送狀態更新失敗: {e}")
 
     elif message_type == "heartbeat":
-        # WebSocket 心跳處理
-        tab_id = data.get("tabId", "unknown")
-        timestamp = data.get("timestamp", 0)
-
-        tab_info = {"timestamp": timestamp, "last_seen": time.time()}
-
-        # 更新會話的標籤頁信息
-        if hasattr(session, "active_tabs"):
-            session.active_tabs[tab_id] = tab_info
-        else:
-            session.active_tabs = {tab_id: tab_info}
-
-        # 同時更新全局標籤頁狀態
-        manager.global_active_tabs[tab_id] = tab_info
+        # WebSocket 心跳處理（簡化版）
+        # 更新心跳時間
+        session.last_heartbeat = time.time()
+        session.last_activity = time.time()
 
         # 發送心跳回應
         if session.websocket:
@@ -515,8 +654,7 @@ async def handle_websocket_message(manager: "WebUIManager", session, data: dict)
                 await session.websocket.send_json(
                     {
                         "type": "heartbeat_response",
-                        "tabId": tab_id,
-                        "timestamp": timestamp,
+                        "timestamp": data.get("timestamp", 0),
                     }
                 )
             except Exception as e:
@@ -528,6 +666,22 @@ async def handle_websocket_message(manager: "WebUIManager", session, data: dict)
         # 清理會話資源
         await session._cleanup_resources_on_timeout()
         # 重構：不再自動停止服務器，保持服務器運行以支援持久性
+
+    elif message_type == "pong":
+        # 處理來自前端的 pong 回應（用於連接檢測）
+        debug_log(f"收到 pong 回應，時間戳: {data.get('timestamp', 'N/A')}")
+        # 可以在這裡記錄延遲或更新連接狀態
+
+    elif message_type == "update_timeout_settings":
+        # 處理超時設定更新
+        settings = data.get("settings", {})
+        debug_log(f"收到超時設定更新: {settings}")
+        if settings.get("enabled"):
+            session.update_timeout_settings(
+                enabled=True, timeout_seconds=settings.get("seconds", 3600)
+            )
+        else:
+            session.update_timeout_settings(enabled=False)
 
     else:
         debug_log(f"未知的消息類型: {message_type}")

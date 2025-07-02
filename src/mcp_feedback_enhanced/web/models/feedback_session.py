@@ -26,18 +26,19 @@ from fastapi import WebSocket
 from ...debug import web_debug_log as debug_log
 from ...utils.error_handler import ErrorHandler, ErrorType
 from ...utils.resource_manager import get_resource_manager, register_process
+from ..constants import get_message_code
 
 
 class SessionStatus(Enum):
-    """會話狀態枚舉"""
+    """會話狀態枚舉 - 單向流轉設計"""
 
     WAITING = "waiting"  # 等待中
-    ACTIVE = "active"  # 活躍中
+    ACTIVE = "active"  # 活躍狀態
     FEEDBACK_SUBMITTED = "feedback_submitted"  # 已提交反饋
     COMPLETED = "completed"  # 已完成
-    TIMEOUT = "timeout"  # 超時
-    ERROR = "error"  # 錯誤
-    EXPIRED = "expired"  # 已過期
+    ERROR = "error"  # 錯誤（終態）
+    TIMEOUT = "timeout"  # 超時（終態）
+    EXPIRED = "expired"  # 已過期（終態）
 
 
 class CleanupReason(Enum):
@@ -62,6 +63,9 @@ SUPPORTED_IMAGE_TYPES = {
     "image/webp",
 }
 TEMP_DIR = Path.home() / ".cache" / "interactive-feedback-mcp-web"
+
+# 訊息代碼現在從統一的常量文件導入
+# 使用 get_message_code 函數來獲取訊息代碼
 
 
 def _safe_parse_command(command: str) -> list[str]:
@@ -133,7 +137,9 @@ class WebFeedbackSession:
         self.feedback_completed = threading.Event()
         self.process: subprocess.Popen | None = None
         self.command_logs: list[str] = []
+        self.user_messages: list[dict] = []  # 用戶消息記錄
         self._cleanup_done = False  # 防止重複清理
+        # 移除語言設定，改由前端處理
 
         # 新增：會話狀態管理
         self.status = SessionStatus.WAITING
@@ -141,6 +147,7 @@ class WebFeedbackSession:
         # 統一使用 time.time() 以避免時間基準不一致
         self.created_at = time.time()
         self.last_activity = self.created_at
+        self.last_heartbeat = None  # 記錄最後一次心跳時間
 
         # 新增：自動清理配置
         self.auto_cleanup_delay = auto_cleanup_delay  # 自動清理延遲時間（秒）
@@ -161,6 +168,11 @@ class WebFeedbackSession:
         # 新增：活躍標籤頁管理
         self.active_tabs: dict[str, Any] = {}
 
+        # 新增：用戶設定的會話超時
+        self.user_timeout_enabled = False
+        self.user_timeout_seconds = 3600  # 預設 1 小時
+        self.user_timeout_timer: threading.Timer | None = None
+
         # 確保臨時目錄存在
         TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -174,21 +186,101 @@ class WebFeedbackSession:
             f"會話 {self.session_id} 初始化完成，自動清理延遲: {auto_cleanup_delay}秒，最大空閒: {max_idle_time}秒"
         )
 
-    def update_status(self, status: SessionStatus, message: str | None = None):
-        """更新會話狀態"""
-        self.status = status
+    def get_message_code(self, key: str) -> str:
+        """
+        獲取訊息代碼
+
+        Args:
+            key: 訊息 key
+
+        Returns:
+            訊息代碼（用於前端 i18n）
+        """
+        return get_message_code(key)
+
+    def next_step(self, message: str | None = None) -> bool:
+        """進入下一個狀態 - 單向流轉，不可倒退"""
+        old_status = self.status
+
+        # 定義狀態流轉路徑
+        next_status_map = {
+            SessionStatus.WAITING: SessionStatus.ACTIVE,
+            SessionStatus.ACTIVE: SessionStatus.FEEDBACK_SUBMITTED,
+            SessionStatus.FEEDBACK_SUBMITTED: SessionStatus.COMPLETED,
+            SessionStatus.COMPLETED: None,  # 終態
+            SessionStatus.ERROR: None,  # 終態
+            SessionStatus.TIMEOUT: None,  # 終態
+            SessionStatus.EXPIRED: None,  # 終態
+        }
+
+        next_status = next_status_map.get(self.status)
+
+        if next_status is None:
+            debug_log(
+                f"⚠️ 會話 {self.session_id} 已處於終態 {self.status.value}，無法進入下一步"
+            )
+            return False
+
+        # 執行狀態轉換
+        self.status = next_status
         if message:
             self.status_message = message
-        # 統一使用 time.time()
+        else:
+            # 默認消息
+            default_messages = {
+                SessionStatus.ACTIVE: "會話已啟動",
+                SessionStatus.FEEDBACK_SUBMITTED: "用戶已提交反饋",
+                SessionStatus.COMPLETED: "會話已完成",
+            }
+            self.status_message = default_messages.get(next_status, "狀態已更新")
+
         self.last_activity = time.time()
 
-        # 如果會話變為活躍狀態，重置清理定時器
-        if status in [SessionStatus.ACTIVE, SessionStatus.FEEDBACK_SUBMITTED]:
+        # 如果會話變為已提交狀態，重置清理定時器
+        if next_status == SessionStatus.FEEDBACK_SUBMITTED:
             self._schedule_auto_cleanup()
 
         debug_log(
-            f"會話 {self.session_id} 狀態更新: {status.value} - {self.status_message}"
+            f"✅ 會話 {self.session_id} 狀態流轉: {old_status.value} → {next_status.value} - {self.status_message}"
         )
+        return True
+
+    def set_error(self, message: str = "會話發生錯誤") -> bool:
+        """設置錯誤狀態（特殊方法，可從任何狀態進入）"""
+        old_status = self.status
+        self.status = SessionStatus.ERROR
+        self.status_message = message
+        self.last_activity = time.time()
+
+        debug_log(
+            f"❌ 會話 {self.session_id} 設置為錯誤狀態: {old_status.value} → {self.status.value} - {message}"
+        )
+        return True
+
+    def set_expired(self, message: str = "會話已過期") -> bool:
+        """設置過期狀態（特殊方法，可從任何狀態進入）"""
+        old_status = self.status
+        self.status = SessionStatus.EXPIRED
+        self.status_message = message
+        self.last_activity = time.time()
+
+        debug_log(
+            f"⏰ 會話 {self.session_id} 設置為過期狀態: {old_status.value} → {self.status.value} - {message}"
+        )
+        return True
+
+    def can_proceed(self) -> bool:
+        """檢查是否可以進入下一步"""
+        return self.status in [SessionStatus.WAITING, SessionStatus.FEEDBACK_SUBMITTED]
+
+    def is_terminal(self) -> bool:
+        """檢查是否處於終態"""
+        return self.status in [
+            SessionStatus.COMPLETED,
+            SessionStatus.ERROR,
+            SessionStatus.TIMEOUT,
+            SessionStatus.EXPIRED,
+        ]
 
     def get_status_info(self) -> dict[str, Any]:
         """獲取會話狀態信息"""
@@ -334,6 +426,39 @@ class WebFeedbackSession:
         )
         return stats
 
+    def update_timeout_settings(self, enabled: bool, timeout_seconds: int = 3600):
+        """
+        更新用戶設定的會話超時
+
+        Args:
+            enabled: 是否啟用超時
+            timeout_seconds: 超時秒數
+        """
+        debug_log(f"更新會話超時設定: enabled={enabled}, seconds={timeout_seconds}")
+
+        # 先停止現有的計時器
+        if self.user_timeout_timer:
+            self.user_timeout_timer.cancel()
+            self.user_timeout_timer = None
+
+        self.user_timeout_enabled = enabled
+        self.user_timeout_seconds = timeout_seconds
+
+        # 如果啟用且會話還在等待中，啟動計時器
+        if enabled and self.status == SessionStatus.WAITING:
+
+            def timeout_handler():
+                debug_log(f"用戶設定的超時已到: {self.session_id}")
+                # 設置超時標誌
+                self.status = SessionStatus.TIMEOUT
+                self.status_message = "用戶設定的會話超時"
+                # 設置完成事件，讓 wait_for_feedback 結束等待
+                self.feedback_completed.set()
+
+            self.user_timeout_timer = threading.Timer(timeout_seconds, timeout_handler)
+            self.user_timeout_timer.start()
+            debug_log(f"已啟動用戶超時計時器: {timeout_seconds}秒")
+
     async def wait_for_feedback(self, timeout: int = 600) -> dict[str, Any]:
         """
         等待用戶回饋，包含圖片，支援超時自動清理
@@ -363,6 +488,12 @@ class WebFeedbackSession:
             completed = await loop.run_in_executor(None, wait_in_thread)
 
             if completed:
+                # 檢查是否是用戶設定的超時
+                if self.status == SessionStatus.TIMEOUT and self.user_timeout_enabled:
+                    debug_log(f"會話 {self.session_id} 因用戶設定超時而結束")
+                    await self._cleanup_resources_on_timeout()
+                    raise TimeoutError("會話已因用戶設定的超時而關閉")
+
                 debug_log(f"會話 {self.session_id} 收到用戶回饋")
                 return {
                     "logs": "\n".join(self.command_logs),
@@ -404,10 +535,8 @@ class WebFeedbackSession:
         self.settings = settings or {}
         self.images = self._process_images(images)
 
-        # 更新狀態為已提交反饋
-        self.update_status(
-            SessionStatus.FEEDBACK_SUBMITTED, "已送出反饋，等待下次 MCP 調用"
-        )
+        # 進入下一步：等待中 → 已提交反饋
+        self.next_step("已送出反饋，等待下次 MCP 調用")
 
         self.feedback_completed.set()
 
@@ -416,8 +545,9 @@ class WebFeedbackSession:
             try:
                 await self.websocket.send_json(
                     {
-                        "type": "feedback_received",
-                        "message": "反饋已成功提交",
+                        "type": "notification",
+                        "code": self.get_message_code("FEEDBACK_SUBMITTED"),
+                        "severity": "success",
                         "status": self.status.value,
                     }
                 )
@@ -442,6 +572,24 @@ class WebFeedbackSession:
                 debug_log(f"發送反饋確認失敗: {e}")
 
         # 重構：不再自動關閉 WebSocket，保持連接以支援頁面持久性
+
+    def add_user_message(self, message_data: dict[str, Any]) -> None:
+        """添加用戶消息記錄"""
+        import time
+
+        # 創建用戶消息記錄
+        user_message = {
+            "timestamp": int(time.time() * 1000),  # 毫秒時間戳
+            "content": message_data.get("content", ""),
+            "images": message_data.get("images", []),
+            "submission_method": message_data.get("submission_method", "manual"),
+            "type": "feedback",
+        }
+
+        self.user_messages.append(user_message)
+        debug_log(
+            f"會話 {self.session_id} 添加用戶消息，總數: {len(self.user_messages)}"
+        )
 
     def _process_images(self, images: list[dict]) -> list[dict]:
         """
@@ -649,24 +797,33 @@ class WebFeedbackSession:
                 self.cleanup_timer = None
                 resources_cleaned += 1
 
+            # 1.5. 取消用戶超時計時器
+            if self.user_timeout_timer:
+                self.user_timeout_timer.cancel()
+                self.user_timeout_timer = None
+                resources_cleaned += 1
+
             # 2. 關閉 WebSocket 連接
             if self.websocket:
                 try:
-                    # 根據清理原因發送不同的通知消息
-                    message_map = {
-                        CleanupReason.TIMEOUT: "會話已超時，介面將自動關閉",
-                        CleanupReason.EXPIRED: "會話已過期，介面將自動關閉",
-                        CleanupReason.MEMORY_PRESSURE: "系統內存不足，會話將被清理",
-                        CleanupReason.MANUAL: "會話已被手動清理",
-                        CleanupReason.ERROR: "會話發生錯誤，將被清理",
-                        CleanupReason.SHUTDOWN: "系統正在關閉，會話將被清理",
+                    # 根據清理原因獲取訊息代碼
+                    code_key_map = {
+                        CleanupReason.TIMEOUT: "TIMEOUT_CLEANUP",
+                        CleanupReason.EXPIRED: "EXPIRED_CLEANUP",
+                        CleanupReason.MEMORY_PRESSURE: "MEMORY_PRESSURE_CLEANUP",
+                        CleanupReason.MANUAL: "MANUAL_CLEANUP",
+                        CleanupReason.ERROR: "ERROR_CLEANUP",
+                        CleanupReason.SHUTDOWN: "SHUTDOWN_CLEANUP",
                     }
+
+                    code_key = code_key_map.get(reason, "SESSION_CLEANUP")
 
                     await self.websocket.send_json(
                         {
-                            "type": "session_cleanup",
+                            "type": "notification",
+                            "code": self.get_message_code(code_key),
+                            "severity": "warning",
                             "reason": reason.value,
-                            "message": message_map.get(reason, "會話將被清理"),
                         }
                     )
                     await asyncio.sleep(0.1)  # 給前端一點時間處理消息

@@ -30,8 +30,8 @@ class I18nManager:
     def __init__(self):
         self._current_language = None
         self._translations = {}
-        self._supported_languages = ["zh-TW", "en", "zh-CN"]
-        self._fallback_language = "en"
+        self._supported_languages = ["zh-CN", "zh-TW", "en"]
+        self._fallback_language = "zh-TW"
         self._config_file = self._get_config_file_path()
         self._locales_dir = Path(__file__).parent / "web" / "locales"
 

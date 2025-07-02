@@ -23,7 +23,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..debug import web_debug_log as debug_log
-from ..i18n import get_i18n_manager
 from ..utils.error_handler import ErrorHandler, ErrorType
 from ..utils.memory_monitor import get_memory_monitor
 from .models import CleanupReason, SessionStatus, WebFeedbackSession
@@ -37,7 +36,14 @@ class WebUIManager:
     """Web UI 管理器 - 重構為單一活躍會話模式"""
 
     def __init__(self, host: str = "127.0.0.1", port: int | None = None):
-        self.host = host
+        # 確定偏好主機：環境變數 > 參數 > 預設值 127.0.0.1
+        env_host = os.getenv("MCP_WEB_HOST")
+        if env_host:
+            self.host = env_host
+            debug_log(f"使用環境變數指定的主機: {self.host}")
+        else:
+            self.host = host
+            debug_log(f"未設定 MCP_WEB_HOST 環境變數，使用預設主機 {self.host}")
 
         # 確定偏好端口：環境變數 > 參數 > 預設值 8765
         preferred_port = 8765
@@ -71,6 +77,18 @@ class WebUIManager:
         if port is not None:
             # 如果明確指定了端口，使用指定的端口
             self.port = port
+            # 檢查指定端口是否可用
+            if not PortManager.is_port_available(self.host, self.port):
+                debug_log(f"警告：指定的端口 {self.port} 可能已被佔用")
+                # 在測試模式下，嘗試尋找替代端口
+                if os.environ.get("MCP_TEST_MODE", "").lower() == "true":
+                    debug_log("測試模式：自動尋找替代端口")
+                    original_port = self.port
+                    self.port = PortManager.find_free_port_enhanced(
+                        preferred_port=self.port, auto_cleanup=False, host=self.host
+                    )
+                    if self.port != original_port:
+                        debug_log(f"自動切換到可用端口: {original_port} → {self.port}")
         elif preferred_port == 0:
             # 如果偏好端口為 0，使用系統自動分配
             import socket
@@ -130,7 +148,7 @@ class WebUIManager:
     def _init_basic_components(self):
         """同步初始化基本組件"""
         # 基本組件初始化（必須同步）
-        self.i18n = get_i18n_manager()
+        # 移除 i18n 管理器，因為翻譯已移至前端
 
         # 設置靜態文件和模板（必須同步）
         self._setup_static_files()
@@ -174,9 +192,8 @@ class WebUIManager:
 
         def preload_i18n():
             try:
-                # 觸發翻譯載入（如果尚未載入）
-                self.i18n.get_supported_languages()
-                debug_log("I18N 資源預載入完成")
+                # I18N 在前端處理，這裡只記錄預載入完成
+                debug_log("I18N 資源預載入完成（前端處理）")
                 return True
             except Exception as e:
                 debug_log(f"I18N 資源預載入失敗: {e}")
@@ -311,24 +328,51 @@ class WebUIManager:
 
     def create_session(self, project_directory: str, summary: str) -> str:
         """創建新的回饋會話 - 重構為單一活躍會話模式，保留標籤頁狀態"""
-        # 保存舊會話的 WebSocket 連接以便發送更新通知
+        # 保存舊會話的引用和 WebSocket 連接
+        old_session = self.current_session
         old_websocket = None
-        if self.current_session and self.current_session.websocket:
-            old_websocket = self.current_session.websocket
+        if old_session and old_session.websocket:
+            old_websocket = old_session.websocket
             debug_log("保存舊會話的 WebSocket 連接以發送更新通知")
 
-        # 如果已有活躍會話，先保存其標籤頁狀態到全局狀態
-        if self.current_session:
-            debug_log("保存現有會話的標籤頁狀態並清理會話")
-            # 保存標籤頁狀態到全局
-            if hasattr(self.current_session, "active_tabs"):
-                self._merge_tabs_to_global(self.current_session.active_tabs)
-
-            # 同步清理會話資源（但保留 WebSocket 連接）
-            self.current_session._cleanup_sync()
-
+        # 創建新會話
         session_id = str(uuid.uuid4())
         session = WebFeedbackSession(session_id, project_directory, summary)
+
+        # 如果有舊會話，處理狀態轉換和清理
+        if old_session:
+            debug_log(
+                f"處理舊會話 {old_session.session_id} 的狀態轉換，當前狀態: {old_session.status.value}"
+            )
+
+            # 保存標籤頁狀態到全局
+            if hasattr(old_session, "active_tabs"):
+                self._merge_tabs_to_global(old_session.active_tabs)
+
+            # 如果舊會話是已提交狀態，進入下一步（已完成）
+            if old_session.status == SessionStatus.FEEDBACK_SUBMITTED:
+                debug_log(
+                    f"舊會話 {old_session.session_id} 進入下一步：已提交 → 已完成"
+                )
+                success = old_session.next_step("反饋已處理，會話完成")
+                if success:
+                    debug_log(f"✅ 舊會話 {old_session.session_id} 成功進入已完成狀態")
+                else:
+                    debug_log(f"❌ 舊會話 {old_session.session_id} 無法進入下一步")
+            else:
+                debug_log(
+                    f"舊會話 {old_session.session_id} 狀態為 {old_session.status.value}，無需轉換"
+                )
+
+            # 確保舊會話仍在字典中（用於API獲取）
+            if old_session.session_id in self.sessions:
+                debug_log(f"舊會話 {old_session.session_id} 仍在會話字典中")
+            else:
+                debug_log(f"⚠️ 舊會話 {old_session.session_id} 不在會話字典中，重新添加")
+                self.sessions[old_session.session_id] = old_session
+
+            # 同步清理會話資源（但保留 WebSocket 連接）
+            old_session._cleanup_sync()
 
         # 將全局標籤頁狀態繼承到新會話
         session.active_tabs = self.global_active_tabs.copy()
@@ -341,25 +385,11 @@ class WebUIManager:
         debug_log(f"創建新的活躍會話: {session_id}")
         debug_log(f"繼承 {len(session.active_tabs)} 個活躍標籤頁")
 
-        # 處理會話更新通知
+        # 處理WebSocket連接轉移
         if old_websocket:
-            # 有舊連接，立即發送會話更新通知並轉移連接
-            self._old_websocket_for_update = old_websocket
-            self._new_session_for_update = session
-            debug_log("已保存舊 WebSocket 連接，準備發送會話更新通知")
-
-            # 立即發送會話更新通知
-            import asyncio
-
-            try:
-                # 在後台任務中發送通知並轉移連接
-                asyncio.create_task(self._send_immediate_session_update())
-            except Exception as e:
-                debug_log(f"創建會話更新任務失敗: {e}")
-                # 即使任務創建失敗，也要嘗試直接轉移連接
-                session.websocket = old_websocket
-                debug_log("任務創建失敗，直接轉移 WebSocket 連接到新會話")
-                self._pending_session_update = True
+            # 直接轉移連接到新會話，消息發送由 smart_open_browser 統一處理
+            session.websocket = old_websocket
+            debug_log("已將舊 WebSocket 連接轉移到新會話")
         else:
             # 沒有舊連接，標記需要發送會話更新通知（當新 WebSocket 連接建立時）
             self._pending_session_update = True
@@ -454,9 +484,48 @@ class WebUIManager:
         def run_server_with_retry():
             max_retries = 5
             retry_count = 0
+            original_port = self.port
 
             while retry_count < max_retries:
                 try:
+                    # 在嘗試啟動前先檢查端口是否可用
+                    if not PortManager.is_port_available(self.host, self.port):
+                        debug_log(f"端口 {self.port} 已被佔用，自動尋找替代端口")
+
+                        # 查找占用端口的進程信息
+                        process_info = PortManager.find_process_using_port(self.port)
+                        if process_info:
+                            debug_log(
+                                f"端口 {self.port} 被進程 {process_info['name']} "
+                                f"(PID: {process_info['pid']}) 佔用"
+                            )
+
+                        # 自動尋找新端口
+                        try:
+                            new_port = PortManager.find_free_port_enhanced(
+                                preferred_port=self.port,
+                                auto_cleanup=False,  # 不自動清理其他進程
+                                host=self.host,
+                            )
+                            debug_log(f"自動切換端口: {self.port} → {new_port}")
+                            self.port = new_port
+                        except RuntimeError as port_error:
+                            error_id = ErrorHandler.log_error_with_context(
+                                port_error,
+                                context={
+                                    "operation": "端口查找",
+                                    "original_port": original_port,
+                                    "current_port": self.port,
+                                },
+                                error_type=ErrorType.NETWORK,
+                            )
+                            debug_log(
+                                f"無法找到可用端口 [錯誤ID: {error_id}]: {port_error}"
+                            )
+                            raise RuntimeError(
+                                f"無法找到可用端口，原始端口 {original_port} 被佔用"
+                            ) from port_error
+
                     debug_log(
                         f"嘗試啟動伺服器在 {self.host}:{self.port} (嘗試 {retry_count + 1}/{max_retries})"
                     )
@@ -483,37 +552,27 @@ class WebUIManager:
                         )
 
                     asyncio.run(serve_with_async_init())
+
+                    # 成功啟動，顯示最終使用的端口
+                    if self.port != original_port:
+                        debug_log(
+                            f"✅ 服務器成功啟動在替代端口 {self.port} (原端口 {original_port} 被佔用)"
+                        )
+
                     break
 
                 except OSError as e:
-                    if e.errno == 10048:  # Windows: 位址已在使用中
+                    if e.errno in {
+                        10048,
+                        98,
+                    }:  # Windows: 10048, Linux: 98 (位址已在使用中)
                         retry_count += 1
                         if retry_count < max_retries:
                             debug_log(
-                                f"端口 {self.port} 被占用，使用增強端口管理查找新端口"
+                                f"端口 {self.port} 啟動失敗 (OSError)，嘗試下一個端口"
                             )
-                            # 使用增強的端口管理查找新端口
-                            try:
-                                self.port = PortManager.find_free_port_enhanced(
-                                    preferred_port=self.port + 1,
-                                    auto_cleanup=False,  # 啟動時不自動清理，避免誤殺其他服務
-                                    host=self.host,
-                                )
-                                debug_log(f"找到新的可用端口: {self.port}")
-                            except RuntimeError as port_error:
-                                # 使用統一錯誤處理
-                                error_id = ErrorHandler.log_error_with_context(
-                                    port_error,
-                                    context={
-                                        "operation": "端口查找",
-                                        "current_port": self.port,
-                                    },
-                                    error_type=ErrorType.NETWORK,
-                                )
-                                debug_log(
-                                    f"無法找到可用端口 [錯誤ID: {error_id}]: {port_error}"
-                                )
-                                break
+                            # 嘗試下一個端口
+                            self.port = self.port + 1
                         else:
                             debug_log("已達到最大重試次數，無法啟動伺服器")
                             break
@@ -577,8 +636,14 @@ class WebUIManager:
             has_active_tabs = await self._check_active_tabs()
 
             if has_active_tabs:
+                debug_log("檢測到活躍標籤頁，發送刷新通知")
+                debug_log(f"向現有標籤頁發送刷新通知：{url}")
+
+                # 向現有標籤頁發送刷新通知
+                refresh_success = await self.notify_existing_tab_to_refresh()
+
+                debug_log(f"刷新通知發送結果: {refresh_success}")
                 debug_log("檢測到活躍標籤頁，不開啟新瀏覽器視窗")
-                debug_log(f"用戶可以在現有標籤頁中查看更新：{url}")
                 return True
 
             # 沒有活躍標籤頁，開啟新瀏覽器視窗
@@ -669,106 +734,6 @@ class WebUIManager:
         else:
             debug_log("沒有活躍的桌面應用程式實例")
 
-    async def notify_session_update(self, session):
-        """向活躍標籤頁發送會話更新通知"""
-        try:
-            # 檢查是否有活躍的 WebSocket 連接
-            if session.websocket:
-                # 直接通過當前會話的 WebSocket 發送
-                await session.websocket.send_json(
-                    {
-                        "type": "session_updated",
-                        "message": "新會話已創建，正在更新頁面內容",
-                        "session_info": {
-                            "project_directory": session.project_directory,
-                            "summary": session.summary,
-                            "session_id": session.session_id,
-                        },
-                    }
-                )
-                debug_log("會話更新通知已通過 WebSocket 發送")
-            else:
-                # 沒有活躍連接，設置待更新標記
-                self._pending_session_update = True
-                debug_log("沒有活躍 WebSocket 連接，設置待更新標記")
-        except Exception as e:
-            debug_log(f"發送會話更新通知失敗: {e}")
-            # 設置待更新標記作為備用方案
-            self._pending_session_update = True
-
-    async def _send_immediate_session_update(self):
-        """立即發送會話更新通知（使用舊的 WebSocket 連接）"""
-        try:
-            # 檢查是否有保存的舊 WebSocket 連接
-            if hasattr(self, "_old_websocket_for_update") and hasattr(
-                self, "_new_session_for_update"
-            ):
-                old_websocket = self._old_websocket_for_update
-                new_session = self._new_session_for_update
-
-                # 改進的連接有效性檢查
-                websocket_valid = False
-                if old_websocket:
-                    try:
-                        # 檢查 WebSocket 連接狀態
-                        if hasattr(old_websocket, "client_state"):
-                            websocket_valid = (
-                                old_websocket.client_state
-                                != old_websocket.client_state.DISCONNECTED
-                            )
-                        else:
-                            # 如果沒有 client_state 屬性，嘗試發送測試消息來檢查連接
-                            websocket_valid = True
-                    except Exception as check_error:
-                        debug_log(f"檢查 WebSocket 連接狀態失敗: {check_error}")
-                        websocket_valid = False
-
-                if websocket_valid:
-                    try:
-                        # 發送會話更新通知
-                        await old_websocket.send_json(
-                            {
-                                "type": "session_updated",
-                                "message": "新會話已創建，正在更新頁面內容",
-                                "session_info": {
-                                    "project_directory": new_session.project_directory,
-                                    "summary": new_session.summary,
-                                    "session_id": new_session.session_id,
-                                },
-                            }
-                        )
-                        debug_log("已通過舊 WebSocket 連接發送會話更新通知")
-
-                        # 延遲一小段時間讓前端處理消息
-                        await asyncio.sleep(0.2)
-
-                        # 將 WebSocket 連接轉移到新會話
-                        new_session.websocket = old_websocket
-                        debug_log("已將 WebSocket 連接轉移到新會話")
-
-                    except Exception as send_error:
-                        debug_log(f"發送會話更新通知失敗: {send_error}")
-                        # 如果發送失敗，仍然嘗試轉移連接
-                        new_session.websocket = old_websocket
-                        debug_log("發送失敗但仍轉移 WebSocket 連接到新會話")
-                else:
-                    debug_log("舊 WebSocket 連接無效，設置待更新標記")
-                    self._pending_session_update = True
-
-                # 清理臨時變數
-                delattr(self, "_old_websocket_for_update")
-                delattr(self, "_new_session_for_update")
-
-            else:
-                # 沒有舊連接，設置待更新標記
-                self._pending_session_update = True
-                debug_log("沒有舊 WebSocket 連接，設置待更新標記")
-
-        except Exception as e:
-            debug_log(f"立即發送會話更新通知失敗: {e}")
-            # 回退到待更新標記
-            self._pending_session_update = True
-
     async def _safe_close_websocket(self, websocket):
         """安全關閉 WebSocket 連接，避免事件循環衝突 - 僅在連接已轉移後調用"""
         if not websocket:
@@ -792,40 +757,102 @@ class WebUIManager:
         except Exception as e:
             debug_log(f"檢查 WebSocket 連接狀態時發生錯誤: {e}")
 
-    async def _check_active_tabs(self) -> bool:
-        """檢查是否有活躍標籤頁 - 優先檢查全局狀態，回退到 API"""
+    async def notify_existing_tab_to_refresh(self) -> bool:
+        """通知現有標籤頁刷新顯示新會話內容
+
+        Returns:
+            bool: True 表示成功發送，False 表示失敗
+        """
         try:
-            # 首先檢查全局標籤頁狀態
-            global_count = self.get_global_active_tabs_count()
-            if global_count > 0:
-                debug_log(f"檢測到 {global_count} 個全局活躍標籤頁")
+            if not self.current_session or not self.current_session.websocket:
+                debug_log("沒有活躍的WebSocket連接，無法發送刷新通知")
+                return False
+
+            # 構建刷新通知消息
+            refresh_message = {
+                "type": "session_updated",
+                "action": "new_session_created",
+                "messageCode": "session.created",
+                "session_info": {
+                    "session_id": self.current_session.session_id,
+                    "project_directory": self.current_session.project_directory,
+                    "summary": self.current_session.summary,
+                    "status": self.current_session.status.value,
+                },
+            }
+
+            # 發送刷新通知
+            await self.current_session.websocket.send_json(refresh_message)
+            debug_log(f"已向現有標籤頁發送刷新通知: {self.current_session.session_id}")
+
+            # 簡單等待一下讓消息發送完成
+            await asyncio.sleep(0.2)
+            debug_log("刷新通知發送完成")
+            return True
+
+        except Exception as e:
+            debug_log(f"發送刷新通知失敗: {e}")
+            return False
+
+    async def _check_active_tabs(self) -> bool:
+        """檢查是否有活躍標籤頁 - 使用分層檢測機制"""
+        try:
+            # 快速檢測層：檢查 WebSocket 物件是否存在
+            if not self.current_session or not self.current_session.websocket:
+                debug_log("快速檢測：沒有當前會話或 WebSocket 連接")
+                return False
+
+            # 檢查心跳（如果有心跳記錄）
+            last_heartbeat = getattr(self.current_session, "last_heartbeat", None)
+            if last_heartbeat:
+                heartbeat_age = time.time() - last_heartbeat
+                if heartbeat_age > 10:  # 超過 10 秒沒有心跳
+                    debug_log(f"快速檢測：心跳超時 ({heartbeat_age:.1f}秒)")
+                    # 可能連接已死，需要進一步檢測
+                else:
+                    debug_log(f"快速檢測：心跳正常 ({heartbeat_age:.1f}秒前)")
+                    return True  # 心跳正常，認為連接活躍
+
+            # 準確檢測層：實際測試連接是否活著
+            try:
+                # 檢查 WebSocket 連接狀態
+                websocket = self.current_session.websocket
+
+                # 檢查連接是否已關閉
+                if hasattr(websocket, "client_state"):
+                    try:
+                        # 嘗試從 starlette 導入（FastAPI 基於 Starlette）
+                        import starlette.websockets  # type: ignore[import-not-found]
+
+                        if hasattr(starlette.websockets, "WebSocketState"):
+                            WebSocketState = starlette.websockets.WebSocketState
+                            if websocket.client_state != WebSocketState.CONNECTED:
+                                debug_log(
+                                    f"準確檢測：WebSocket 狀態不是 CONNECTED，而是 {websocket.client_state}"
+                                )
+                                # 清理死連接
+                                self.current_session.websocket = None
+                                return False
+                    except ImportError:
+                        # 如果導入失敗，使用替代方法
+                        debug_log("無法導入 WebSocketState，使用替代方法檢測連接")
+                        # 跳過狀態檢查，直接測試連接
+
+                # 如果連接看起來是活的，嘗試發送 ping（非阻塞）
+                # 注意：FastAPI WebSocket 沒有內建的 ping 方法，這裡使用自定義消息
+                await websocket.send_json({"type": "ping", "timestamp": time.time()})
+                debug_log("準確檢測：成功發送 ping 消息，連接是活躍的")
                 return True
 
-            # 如果全局狀態沒有活躍標籤頁，嘗試通過 API 檢查
-            # 等待一小段時間讓服務器完全啟動
-            await asyncio.sleep(0.5)
+            except Exception as e:
+                debug_log(f"準確檢測：連接測試失敗 - {e}")
+                # 連接已死，清理它
+                if self.current_session:
+                    self.current_session.websocket = None
+                return False
 
-            # 調用活躍標籤頁 API
-            import aiohttp
-
-            timeout = aiohttp.ClientTimeout(total=2)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(
-                    f"{self.get_server_url()}/api/active-tabs"
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        tab_count = data.get("count", 0)
-                        debug_log(f"API 檢測到 {tab_count} 個活躍標籤頁")
-                        return bool(tab_count > 0)
-                    debug_log(f"檢查活躍標籤頁失敗，狀態碼：{response.status}")
-                    return False
-
-        except TimeoutError:
-            debug_log("檢查活躍標籤頁超時")
-            return False
         except Exception as e:
-            debug_log(f"檢查活躍標籤頁時發生錯誤：{e}")
+            debug_log(f"檢查活躍連接時發生錯誤：{e}")
             return False
 
     def get_server_url(self) -> str:
@@ -1085,7 +1112,7 @@ async def launch_web_feedback_ui(
     """
     manager = get_web_ui_manager()
 
-    # 創建或更新當前活躍會話
+    # 創建新會話（每次AI調用都應該創建新會話）
     manager.create_session(project_directory, summary)
     session = manager.get_current_session()
 
@@ -1112,10 +1139,9 @@ async def launch_web_feedback_ui(
 
     debug_log(f"[DEBUG] 服務器地址: {feedback_url}")
 
-    # 如果檢測到活躍標籤頁但沒有開啟新視窗，立即發送會話更新通知
+    # 如果檢測到活躍標籤頁，消息已在 smart_open_browser 中發送，無需額外處理
     if has_active_tabs:
-        await manager._send_immediate_session_update()
-        debug_log("已向活躍標籤頁發送會話更新通知")
+        debug_log("檢測到活躍標籤頁，會話更新通知已發送")
 
     try:
         # 等待用戶回饋，傳遞 timeout 參數

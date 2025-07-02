@@ -42,6 +42,10 @@
         this.audioManager = null;
         this.audioSettingsUI = null;
 
+        // 通知管理器
+        this.notificationManager = null;
+        this.notificationSettings = null;
+
         // 自動提交管理器
         this.autoSubmitManager = null;
 
@@ -168,7 +172,7 @@
 
                         // 3. 初始化 UI 管理器
                         self.uiManager = new window.MCPFeedback.UIManager({
-                            currentTab: settings.activeTab,
+                            // 移除 activeTab - 頁籤切換無需持久化
                             layoutMode: settings.layoutMode,
                             onTabChange: function(tabName) {
                                 self.handleTabChange(tabName);
@@ -178,8 +182,7 @@
                             }
                         });
 
-                        // 4. 初始化標籤頁管理器
-                        self.tabManager = new window.MCPFeedback.TabManager();
+
 
                         // 5. 初始化連線監控器
                         self.connectionMonitor = new window.MCPFeedback.ConnectionMonitor({
@@ -240,32 +243,44 @@
                         // 10. 初始化音效管理器
                         self.initializeAudioManagers();
 
-                        // 11. 初始化自動提交管理器
+                        // 11. 初始化通知管理器
+                        self.initializeNotificationManager();
+
+                        // 12. 初始化自動提交管理器
                         self.initializeAutoSubmitManager();
 
-                        // 12. 初始化 Textarea 高度管理器
+                        // 13. 初始化 Textarea 高度管理器
                         self.initializeTextareaHeightManager();
 
-                        // 13. 應用設定到 UI
+                        // 14. 應用設定到 UI
                         self.settingsManager.applyToUI();
 
-                        // 14. 初始化各個管理器
+                        // 15. 初始化各個管理器
                         self.uiManager.initTabs();
                         self.imageHandler.init();
 
-                        // 15. 檢查並啟動自動提交（如果條件滿足）
+                        // 16. 檢查並啟動自動提交（如果條件滿足）
                         setTimeout(function() {
                             self.checkAndStartAutoSubmit();
                         }, 500); // 延遲 500ms 確保所有初始化完成
 
-                        // 16. 播放啟動音效（如果音效已啟用）
+                        // 17. 播放啟動音效（如果音效已啟用）
                         setTimeout(function() {
                             if (self.audioManager) {
                                 self.audioManager.playStartupNotification();
                             }
                         }, 800); // 延遲 800ms 確保所有初始化完成且避免與其他音效衝突
 
-                        // 17. 建立 WebSocket 連接
+                        // 17. 初始化會話超時設定
+                        if (self.settingsManager.get('sessionTimeoutEnabled')) {
+                            const timeoutSettings = {
+                                enabled: self.settingsManager.get('sessionTimeoutEnabled'),
+                                seconds: self.settingsManager.get('sessionTimeoutSeconds')
+                            };
+                            self.webSocketManager.updateSessionTimeoutSettings(timeoutSettings);
+                        }
+
+                        // 18. 建立 WebSocket 連接
                         self.webSocketManager.connect();
 
                         resolve();
@@ -315,6 +330,15 @@
                 });
             }
 
+            // 複製用戶內容按鈕
+            const copyUserFeedback = window.MCPFeedback.Utils.safeQuerySelector('#copyUserFeedback');
+            if (copyUserFeedback) {
+                copyUserFeedback.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    self.copyUserFeedback();
+                });
+            }
+
             // 快捷鍵
             document.addEventListener('keydown', function(e) {
                 // Ctrl+Enter 提交回饋
@@ -332,8 +356,26 @@
                 // ESC 鍵功能已移除 - 避免意外清空用戶輸入的文字
             });
 
+            // 倒數計時器暫停/恢復按鈕
+            const countdownPauseBtn = window.MCPFeedback.Utils.safeQuerySelector('#countdownPauseBtn');
+            if (countdownPauseBtn) {
+                countdownPauseBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    if (self.autoSubmitManager) {
+                        self.autoSubmitManager.togglePause();
+                    }
+                });
+            }
+
+            
+            // 自動命令設定相關事件
+            self.setupAutoCommandEvents();
+
             // 設置設定管理器的事件監聽器
             self.settingsManager.setupEventListeners();
+
+            // 設置用戶活動監聽（用於重置會話超時）
+            self.setupUserActivityListeners();
 
             console.log('✅ 事件監聽器設置完成');
             resolve();
@@ -401,8 +443,8 @@
             this.imageHandler.reinitialize(layoutMode);
         }
 
-        // 保存當前頁籤設定
-        this.settingsManager.set('activeTab', tabName);
+        // 移除頁籤狀態保存 - 頁籤切換無需持久化
+        // this.settingsManager.set('activeTab', tabName);
     };
 
     /**
@@ -516,6 +558,52 @@
     };
 
     /**
+     * 初始化通知管理器
+     */
+    FeedbackApp.prototype.initializeNotificationManager = function() {
+        console.log('🔔 初始化通知管理器...');
+
+        try {
+            // 檢查通知模組是否已載入
+            if (!window.MCPFeedback.NotificationManager) {
+                console.warn('⚠️ 通知模組未載入，跳過初始化');
+                return;
+            }
+
+            // 1. 初始化通知管理器
+            this.notificationManager = new window.MCPFeedback.NotificationManager({
+                t: window.i18nManager ? window.i18nManager.t.bind(window.i18nManager) : function(key, defaultValue) { return defaultValue || key; }
+            });
+            this.notificationManager.initialize();
+
+            // 2. 初始化通知設定 UI
+            if (window.MCPFeedback.NotificationSettings) {
+                const notificationContainer = document.querySelector('#notificationSettingsContainer');
+                console.log('🔍 通知設定容器:', notificationContainer);
+                
+                if (notificationContainer) {
+                    this.notificationSettings = new window.MCPFeedback.NotificationSettings({
+                        container: notificationContainer,
+                        notificationManager: this.notificationManager,
+                        t: window.i18nManager ? window.i18nManager.t.bind(window.i18nManager) : function(key, defaultValue) { return defaultValue || key; }
+                    });
+                    this.notificationSettings.initialize();
+                    console.log('✅ 通知設定 UI 初始化完成');
+                } else {
+                    console.error('❌ 找不到通知設定容器元素 notificationSettingsContainer');
+                }
+            } else {
+                console.warn('⚠️ NotificationSettings 模組未載入');
+            }
+
+            console.log('✅ 通知管理器初始化完成');
+
+        } catch (error) {
+            console.error('❌ 通知管理器初始化失敗:', error);
+        }
+    };
+
+    /**
      * 初始化 Textarea 高度管理器
      */
     FeedbackApp.prototype.initializeTextareaHeightManager = function() {
@@ -598,11 +686,24 @@
                 break;
             case 'session_updated':
                 console.log('🔄 收到會話更新訊息:', data.session_info);
+                // 處理訊息代碼
+                if (data.messageCode && window.i18nManager) {
+                    const message = window.i18nManager.t(data.messageCode);
+                    window.MCPFeedback.Utils.showMessage(message, window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS);
+                }
                 this._originalHandleSessionUpdated(data);
                 break;
             case 'desktop_close_request':
                 console.log('🖥️ 收到桌面關閉請求');
                 this.handleDesktopCloseRequest(data);
+                break;
+            case 'notification':
+                console.log('📢 收到通知:', data);
+                // 處理 FEEDBACK_SUBMITTED 通知
+                if (data.code === 'session.feedbackSubmitted' || data.code === 'FEEDBACK_SUBMITTED' || data.code === 201) {
+                    console.log('✅ 回饋提交成功通知');
+                    this.handleFeedbackReceived(data);
+                }
                 break;
         }
     };
@@ -611,7 +712,11 @@
      * 處理 WebSocket 訊息（防抖版本）
      */
     FeedbackApp.prototype.handleWebSocketMessage = function(data) {
-        if (this._debouncedHandleWebSocketMessage) {
+        // 命令輸出相關的訊息不應該使用防抖，需要立即處理
+        if (data.type === 'command_output' || data.type === 'command_complete' || data.type === 'command_error') {
+            this._originalHandleWebSocketMessage(data);
+        } else if (this._debouncedHandleWebSocketMessage) {
+            // 其他訊息類型使用防抖
             this._debouncedHandleWebSocketMessage(data);
         } else {
             // 回退到原始方法（防抖未初始化時）
@@ -640,15 +745,45 @@
         this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED);
         this.uiManager.setLastSubmissionTime(Date.now());
 
+        // 停止自動提交計時器（如果正在運行）
+        if (this.autoSubmitManager && this.autoSubmitManager.isEnabled) {
+            console.log('⏸️ 反饋已成功提交，停止自動提交倒數計時器');
+            this.autoSubmitManager.stop();
+        }
+
         // 顯示成功訊息
-        const successMessage = window.i18nManager ? window.i18nManager.t('feedback.submitSuccess') : '回饋提交成功！';
-        window.MCPFeedback.Utils.showMessage(data.message || successMessage, window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS);
+        if (data.messageCode && window.i18nManager) {
+            const message = window.i18nManager.t(data.messageCode, data.params);
+            window.MCPFeedback.Utils.showMessage(message, window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS);
+        } else {
+            const successMessage = window.i18nManager ? window.i18nManager.t('feedback.submitSuccess') : '回饋提交成功！';
+            window.MCPFeedback.Utils.showMessage(data.message || successMessage, window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS);
+        }
 
         // 更新 AI 摘要區域顯示「已送出反饋」狀態
         const submittedMessage = window.i18nManager ? window.i18nManager.t('feedback.submittedWaiting') : '已送出反饋，等待下次 MCP 調用...';
         this.updateSummaryStatus(submittedMessage);
+        
+        // 執行提交回饋後的自動命令
+        this.executeAutoCommandOnFeedbackSubmit();
+
+        // 刷新會話列表以顯示最新狀態
+        this.refreshSessionList();
 
         console.log('反饋已提交，頁面保持開啟狀態');
+    };
+
+    /**
+     * 刷新會話列表以顯示最新狀態
+     */
+    FeedbackApp.prototype.refreshSessionList = function() {
+        // 如果有會話管理器，觸發數據刷新
+        if (this.sessionManager && this.sessionManager.dataManager) {
+            console.log('🔄 刷新會話列表以顯示最新狀態');
+            this.sessionManager.dataManager.loadFromServer();
+        } else {
+            console.log('⚠️ 會話管理器未初始化，跳過會話列表刷新');
+        }
     };
 
     /**
@@ -683,7 +818,79 @@
      * 處理會話更新（原始版本，供防抖使用）
      */
     FeedbackApp.prototype._originalHandleSessionUpdated = function(data) {
-        console.log('🔄 處理會話更新:', data.session_info);
+        console.log('🔄 處理會話更新:', data);
+        console.log('🔍 檢查 action 字段:', data.action);
+        console.log('🔍 檢查 type 字段:', data.type);
+
+        // 檢查是否是新會話創建的通知
+        if (data.action === 'new_session_created' || data.type === 'new_session_created') {
+            console.log('🆕 檢測到新會話創建，局部更新頁面內容');
+
+            // 播放音效通知
+            if (this.audioManager) {
+                this.audioManager.playNotification();
+            }
+            
+            // 執行新會話自動命令
+            this.executeAutoCommandOnNewSession();
+
+            // 發送瀏覽器通知
+            if (this.notificationManager && data.session_info) {
+                this.notificationManager.notifyNewSession(
+                    data.session_info.session_id,
+                    data.session_info.project_directory || data.project_directory || '未知專案'
+                );
+            }
+
+            // 顯示新會話通知
+            const defaultMessage = window.i18nManager ? 
+                window.i18nManager.t('session.created') : 
+                'New MCP session created, page will refresh automatically';
+            window.MCPFeedback.Utils.showMessage(
+                data.message || defaultMessage,
+                window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS
+            );
+
+            // 局部更新頁面內容而非開啟新視窗
+            const self = this;
+            setTimeout(function() {
+                console.log('🔄 執行局部更新頁面內容');
+
+                // 1. 更新會話資訊
+                if (data.session_info) {
+                    self.currentSessionId = data.session_info.session_id;
+                    console.log('📋 新會話 ID:', self.currentSessionId);
+                }
+
+                // 2. 刷新頁面內容（AI 摘要、表單等）
+                self.refreshPageContent();
+
+                // 3. 重置表單狀態
+                self.clearFeedback();
+
+                // 4. 重置回饋狀態為等待中
+                if (self.uiManager) {
+                    self.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, self.currentSessionId);
+                }
+                
+                // 5. 重新啟動會話超時計時器（如果已啟用）
+                if (self.settingsManager && self.settingsManager.get('sessionTimeoutEnabled')) {
+                    console.log('🔄 新會話創建，重新啟動會話超時計時器');
+                    const timeoutSettings = {
+                        enabled: self.settingsManager.get('sessionTimeoutEnabled'),
+                        seconds: self.settingsManager.get('sessionTimeoutSeconds')
+                    };
+                    self.webSocketManager.updateSessionTimeoutSettings(timeoutSettings);
+                }
+
+                // 6. 檢查並啟動自動提交
+                self.checkAndStartAutoSubmit();
+
+                console.log('✅ 局部更新完成，頁面已準備好接收新的回饋');
+            }, 500);
+
+            return; // 提前返回，不執行後續的局部更新邏輯
+        }
 
         // 播放音效通知
         if (this.audioManager) {
@@ -759,8 +966,16 @@
                 }
             }
 
-            // 重置回饋狀態為等待新回饋
-            this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, newSessionId);
+            // 檢查當前狀態，只有在非已提交狀態時才重置
+            const currentState = this.uiManager.getFeedbackState();
+            if (currentState !== window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED) {
+                this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, newSessionId);
+                console.log('🔄 會話更新：重置回饋狀態為等待新回饋');
+            } else {
+                console.log('🔒 會話更新：保護已提交狀態，不重置');
+                // 更新會話ID但保持已提交狀態
+                this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED, newSessionId);
+            }
 
             // 檢查並啟動自動提交（如果條件滿足）
             const self = this;
@@ -800,7 +1015,16 @@
      * 處理狀態更新（原始版本，供防抖使用）
      */
     FeedbackApp.prototype._originalHandleStatusUpdate = function(statusInfo) {
-        console.log('處理狀態更新:', statusInfo);
+        console.log('📊 處理狀態更新:', statusInfo);
+
+        const sessionId = statusInfo.session_id;
+        console.log('🔍 狀態更新詳情:', {
+            currentSessionId: this.currentSessionId,
+            newSessionId: sessionId,
+            status: statusInfo.status,
+            message: statusInfo.message,
+            isNewSession: sessionId !== this.currentSessionId
+        });
 
         // 更新 SessionManager 的狀態資訊
         if (this.sessionManager && this.sessionManager.updateStatusInfo) {
@@ -813,36 +1037,39 @@
             document.title = 'MCP Feedback - ' + projectName;
         }
 
-        // 提取會話 ID
-        const sessionId = statusInfo.session_id || this.currentSessionId;
+        // 使用之前已聲明的 sessionId
 
-        // 根據狀態更新 UI
+        // 前端只管理會話ID，所有狀態都從服務器獲取
+        console.log('📊 收到服務器狀態更新:', statusInfo.status, '會話ID:', sessionId);
+
+        // 更新當前會話ID
+        if (sessionId) {
+            this.currentSessionId = sessionId;
+            console.log('🔄 更新當前會話ID:', sessionId.substring(0, 8) + '...');
+        }
+
+        // 刷新會話列表以顯示最新狀態
+        this.refreshSessionList();
+
+        // 根據服務器狀態更新消息顯示（不修改前端狀態）
         switch (statusInfo.status) {
             case 'feedback_submitted':
-                this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED, sessionId);
                 const submittedMessage = window.i18nManager ? window.i18nManager.t('feedback.submittedWaiting') : '已送出反饋，等待下次 MCP 調用...';
                 this.updateSummaryStatus(submittedMessage);
                 break;
-
-            case 'active':
             case 'waiting':
-                // 檢查是否是新會話
-                if (sessionId && sessionId !== this.currentSessionId) {
-                    this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, sessionId);
-                } else if (this.uiManager.getFeedbackState() !== window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED) {
-                    this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, sessionId);
-                }
+                const waitingMessage = window.i18nManager ? window.i18nManager.t('feedback.waitingForUser') : '等待用戶回饋...';
+                this.updateSummaryStatus(waitingMessage);
 
-                if (statusInfo.status === 'waiting') {
-                    const waitingMessage = window.i18nManager ? window.i18nManager.t('feedback.waitingForUser') : '等待用戶回饋...';
-                    this.updateSummaryStatus(waitingMessage);
-
-                    // 檢查並啟動自動提交（如果條件滿足）
-                    const self = this;
-                    setTimeout(function() {
-                        self.checkAndStartAutoSubmit();
-                    }, 100); // 短暫延遲確保狀態更新完成
-                }
+                // 檢查並啟動自動提交（如果條件滿足）
+                const self = this;
+                setTimeout(function() {
+                    self.checkAndStartAutoSubmit();
+                }, 100);
+                break;
+            case 'completed':
+                const completedMessage = window.i18nManager ? window.i18nManager.t('feedback.completed') : '會話已完成';
+                this.updateSummaryStatus(completedMessage);
                 break;
         }
     };
@@ -885,10 +1112,15 @@
      * 檢查是否可以提交回饋
      */
     FeedbackApp.prototype.canSubmitFeedback = function() {
-        return this.webSocketManager &&
-               this.webSocketManager.isReady() &&
-               this.uiManager &&
-               this.uiManager.getFeedbackState() === window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING;
+        // 簡化檢查：只檢查WebSocket連接，狀態由服務器端驗證
+        const wsReady = this.webSocketManager && this.webSocketManager.isReady();
+
+        console.log('🔍 提交檢查:', {
+            wsReady: wsReady,
+            sessionId: this.currentSessionId
+        });
+
+        return wsReady;
     };
 
     /**
@@ -929,7 +1161,10 @@
         const images = this.imageHandler ? this.imageHandler.getImages() : [];
 
         if (!feedback && images.length === 0) {
-            window.MCPFeedback.Utils.showMessage('請提供回饋文字或上傳圖片', window.MCPFeedback.Utils.CONSTANTS.MESSAGE_WARNING);
+            const message = window.i18nManager ? 
+                window.i18nManager.t('feedback.provideTextOrImage', '請提供回饋文字或上傳圖片') : 
+                '請提供回饋文字或上傳圖片';
+            window.MCPFeedback.Utils.showMessage(message, window.MCPFeedback.Utils.CONSTANTS.MESSAGE_WARNING);
             return null;
         }
 
@@ -958,6 +1193,18 @@
                 this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_PROCESSING);
             }
 
+            // 停止自動提交計時器（如果正在運行）
+            if (this.autoSubmitManager && this.autoSubmitManager.isEnabled) {
+                console.log('⏸️ 手動提交反饋，停止自動提交倒數計時器');
+                this.autoSubmitManager.stop();
+            }
+            
+            // 停止會話超時計時器
+            if (this.webSocketManager) {
+                console.log('⏸️ 提交反饋，停止會話超時計時器');
+                this.webSocketManager.stopSessionTimeout();
+            }
+
             // 3. 發送回饋到 AI 助手
             const success = this.webSocketManager.send({
                 type: 'submit_feedback',
@@ -967,8 +1214,14 @@
             });
 
             if (success) {
-                // 清空表單
-                this.clearFeedback();
+                // 重置表單狀態但保留文字內容
+                if (this.uiManager) {
+                    this.uiManager.resetFeedbackForm(false);  // false 表示不清空文字
+                }
+                // 只清空圖片
+                if (this.imageHandler) {
+                    this.imageHandler.clearImages();
+                }
                 console.log('📤 回饋已發送，等待服務器確認...');
             } else {
                 throw new Error('WebSocket 發送失敗');
@@ -1030,9 +1283,9 @@
     FeedbackApp.prototype.clearFeedback = function() {
         console.log('🧹 清空回饋內容...');
 
-        // 使用 UI 管理器重置表單
+        // 使用 UI 管理器重置表單，並清空文字
         if (this.uiManager) {
-            this.uiManager.resetFeedbackForm();
+            this.uiManager.resetFeedbackForm(true);  // 傳入 true 表示要清空文字
         }
 
         // 清空圖片數據
@@ -1041,6 +1294,57 @@
         }
 
         console.log('✅ 回饋內容清空完成');
+    };
+
+    /**
+     * 複製用戶回饋內容
+     */
+    FeedbackApp.prototype.copyUserFeedback = function() {
+        console.log('📋 複製用戶回饋內容...');
+
+        const feedbackInput = window.MCPFeedback.Utils.safeQuerySelector('#combinedFeedbackText');
+        if (!feedbackInput || !feedbackInput.value.trim()) {
+            window.MCPFeedback.Utils.showMessage(
+                window.i18nManager ? window.i18nManager.t('feedback.noContent') : '沒有可複製的內容',
+                window.MCPFeedback.Utils.CONSTANTS.MESSAGE_WARNING
+            );
+            return;
+        }
+
+        const textContent = feedbackInput.value;
+
+        // 複製到剪貼板
+        navigator.clipboard.writeText(textContent)
+            .then(function() {
+                console.log('✅ 內容已複製到剪貼板');
+                window.MCPFeedback.Utils.showMessage(
+                    window.i18nManager ? window.i18nManager.t('feedback.copySuccess') : '內容已複製到剪貼板',
+                    window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS
+                );
+            })
+            .catch(function(err) {
+                console.error('❌ 複製失敗:', err);
+                // 降級方案：使用舊的複製方法
+                const textarea = document.createElement('textarea');
+                textarea.value = textContent;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-999999px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    window.MCPFeedback.Utils.showMessage(
+                        window.i18nManager ? window.i18nManager.t('feedback.copySuccess') : '內容已複製到剪貼板',
+                        window.MCPFeedback.Utils.CONSTANTS.MESSAGE_SUCCESS
+                    );
+                } catch (error) {
+                    window.MCPFeedback.Utils.showMessage(
+                        window.i18nManager ? window.i18nManager.t('feedback.copyFailed') : '複製失敗',
+                        window.MCPFeedback.Utils.CONSTANTS.MESSAGE_ERROR
+                    );
+                }
+                document.body.removeChild(textarea);
+            });
     };
 
     /**
@@ -1130,6 +1434,22 @@
     FeedbackApp.prototype.appendCommandOutput = function(output) {
         const commandOutput = window.MCPFeedback.Utils.safeQuerySelector('#commandOutput');
         if (commandOutput) {
+            // 檢查是否是空的（首次使用）
+            if (commandOutput.textContent === '' && output.startsWith('$')) {
+                // 如果是空的且輸出以 $ 開頭，添加歡迎訊息
+                const projectPathElement = window.MCPFeedback.Utils.safeQuerySelector('#projectPathDisplay');
+                const projectPath = projectPathElement ? projectPathElement.getAttribute('data-full-path') : 'unknown';
+                
+                const welcomeText = `歡迎使用互動回饋終端
+========================================
+專案目錄: ${projectPath}
+輸入命令後按 Enter 或點擊執行按鈕
+支援的命令: ls, dir, pwd, cat, type 等
+
+`;
+                commandOutput.textContent = welcomeText;
+            }
+            
             commandOutput.textContent += output;
             commandOutput.scrollTop = commandOutput.scrollHeight;
         }
@@ -1150,6 +1470,68 @@
     };
 
     /**
+     * 執行新會話自動命令
+     */
+    FeedbackApp.prototype.executeAutoCommandOnNewSession = function() {
+        if (!this.settingsManager) return;
+        
+        const settings = this.settingsManager.currentSettings;
+        if (!settings.autoCommandEnabled || !settings.commandOnNewSession) {
+            console.log('⏩ 新會話自動命令未啟用或未設定');
+            return;
+        }
+        
+        const command = settings.commandOnNewSession.trim();
+        if (!command) return;
+        
+        console.log('🚀 執行新會話自動命令:', command);
+        this.appendCommandOutput('🆕 [自動執行] $ ' + command + '\n');
+        
+        // 使用 WebSocket 發送命令
+        if (this.webSocketManager && this.webSocketManager.isConnected) {
+            console.log('📡 WebSocket 已連接，發送命令:', command);
+            this.webSocketManager.send({
+                type: 'run_command',
+                command: command
+            });
+        } else {
+            console.error('❌ 無法執行自動命令：WebSocket 未連接');
+            this.appendCommandOutput('[錯誤] WebSocket 未連接，無法執行命令\n');
+        }
+    };
+    
+    /**
+     * 執行提交回饋後自動命令
+     */
+    FeedbackApp.prototype.executeAutoCommandOnFeedbackSubmit = function() {
+        if (!this.settingsManager) return;
+        
+        const settings = this.settingsManager.currentSettings;
+        if (!settings.autoCommandEnabled || !settings.commandOnFeedbackSubmit) {
+            console.log('⏩ 提交回饋後自動命令未啟用或未設定');
+            return;
+        }
+        
+        const command = settings.commandOnFeedbackSubmit.trim();
+        if (!command) return;
+        
+        console.log('🚀 執行提交回饋後自動命令:', command);
+        this.appendCommandOutput('✅ [自動執行] $ ' + command + '\n');
+        
+        // 使用 WebSocket 發送命令
+        if (this.webSocketManager && this.webSocketManager.isConnected) {
+            console.log('📡 WebSocket 已連接，發送命令:', command);
+            this.webSocketManager.send({
+                type: 'run_command',
+                command: command
+            });
+        } else {
+            console.error('❌ 無法執行自動命令：WebSocket 未連接');
+            this.appendCommandOutput('[錯誤] WebSocket 未連接，無法執行命令\n');
+        }
+    };
+
+    /**
      * 更新摘要狀態
      */
     FeedbackApp.prototype.updateSummaryStatus = function(message) {
@@ -1160,18 +1542,134 @@
     };
 
     /**
+     * 設置自動命令相關事件
+     */
+    FeedbackApp.prototype.setupAutoCommandEvents = function() {
+        const self = this;
+        
+        // 自動命令開關
+        const autoCommandEnabled = window.MCPFeedback.Utils.safeQuerySelector('#autoCommandEnabled');
+        if (autoCommandEnabled) {
+            // 載入設定
+            if (this.settingsManager) {
+                autoCommandEnabled.checked = this.settingsManager.currentSettings.autoCommandEnabled;
+                this.updateAutoCommandUI(autoCommandEnabled.checked);
+            }
+            
+            autoCommandEnabled.addEventListener('change', function() {
+                const enabled = autoCommandEnabled.checked;
+                self.updateAutoCommandUI(enabled);
+                
+                if (self.settingsManager) {
+                    self.settingsManager.saveSettings({
+                        autoCommandEnabled: enabled
+                    });
+                }
+            });
+        }
+        
+        // 新會話命令輸入
+        const commandOnNewSession = window.MCPFeedback.Utils.safeQuerySelector('#commandOnNewSession');
+        if (commandOnNewSession) {
+            // 載入設定
+            if (this.settingsManager) {
+                commandOnNewSession.value = this.settingsManager.currentSettings.commandOnNewSession || '';
+            }
+            
+            commandOnNewSession.addEventListener('change', function() {
+                if (self.settingsManager) {
+                    self.settingsManager.saveSettings({
+                        commandOnNewSession: commandOnNewSession.value
+                    });
+                }
+            });
+        }
+        
+        // 提交回饋後命令輸入
+        const commandOnFeedbackSubmit = window.MCPFeedback.Utils.safeQuerySelector('#commandOnFeedbackSubmit');
+        if (commandOnFeedbackSubmit) {
+            // 載入設定
+            if (this.settingsManager) {
+                commandOnFeedbackSubmit.value = this.settingsManager.currentSettings.commandOnFeedbackSubmit || '';
+            }
+            
+            commandOnFeedbackSubmit.addEventListener('change', function() {
+                if (self.settingsManager) {
+                    self.settingsManager.saveSettings({
+                        commandOnFeedbackSubmit: commandOnFeedbackSubmit.value
+                    });
+                }
+            });
+        }
+        
+        // 測試執行按鈕
+        const testNewSessionCommand = window.MCPFeedback.Utils.safeQuerySelector('#testNewSessionCommand');
+        if (testNewSessionCommand) {
+            testNewSessionCommand.addEventListener('click', function() {
+                const command = commandOnNewSession ? commandOnNewSession.value.trim() : '';
+                if (command) {
+                    self.testCommand(command, '🆕 [測試] ');
+                } else {
+                    window.MCPFeedback.Utils.showMessage('請先輸入命令', window.MCPFeedback.Utils.CONSTANTS.MESSAGE_WARNING);
+                }
+            });
+        }
+        
+        const testFeedbackCommand = window.MCPFeedback.Utils.safeQuerySelector('#testFeedbackCommand');
+        if (testFeedbackCommand) {
+            testFeedbackCommand.addEventListener('click', function() {
+                const command = commandOnFeedbackSubmit ? commandOnFeedbackSubmit.value.trim() : '';
+                if (command) {
+                    self.testCommand(command, '✅ [測試] ');
+                } else {
+                    window.MCPFeedback.Utils.showMessage('請先輸入命令', window.MCPFeedback.Utils.CONSTANTS.MESSAGE_WARNING);
+                }
+            });
+        }
+    };
+    
+    /**
+     * 更新自動命令 UI 狀態
+     */
+    FeedbackApp.prototype.updateAutoCommandUI = function(enabled) {
+        const autoCommandContent = window.MCPFeedback.Utils.safeQuerySelector('#autoCommandContent');
+        if (autoCommandContent) {
+            if (enabled) {
+                autoCommandContent.classList.remove('disabled');
+            } else {
+                autoCommandContent.classList.add('disabled');
+            }
+        }
+    };
+    
+    /**
+     * 測試命令執行
+     */
+    FeedbackApp.prototype.testCommand = function(command, prefix) {
+        if (!command) return;
+        
+        console.log('🧪 測試執行命令:', command);
+        this.appendCommandOutput(prefix + '$ ' + command + '\n');
+        
+        // 使用 WebSocket 發送命令
+        if (this.webSocketManager && this.webSocketManager.isConnected) {
+            this.webSocketManager.send({
+                type: 'run_command',
+                command: command
+            });
+        } else {
+            this.appendCommandOutput('❌ WebSocket 未連接\n');
+        }
+    };
+
+    /**
      * 處理會話更新（來自自動刷新）
      */
     FeedbackApp.prototype.handleSessionUpdate = function(sessionData) {
         console.log('🔄 處理自動檢測到的會話更新:', sessionData);
 
-        // 更新當前會話 ID
+        // 只更新當前會話 ID，不管理狀態
         this.currentSessionId = sessionData.session_id;
-
-        // 重置回饋狀態
-        if (this.uiManager) {
-            this.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, sessionData.session_id);
-        }
 
         // 局部更新頁面內容
         this.refreshPageContent();
@@ -1195,16 +1693,24 @@
             .then(function(sessionData) {
                 console.log('📥 獲取到最新會話資料:', sessionData);
 
-                // 重置回饋狀態
+                // 檢查並保護已提交狀態
                 if (sessionData.session_id && self.uiManager) {
-                    self.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, sessionData.session_id);
+                    const currentState = self.uiManager.getFeedbackState();
+                    if (currentState !== window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED) {
+                        self.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_WAITING, sessionData.session_id);
+                        console.log('🔄 局部更新：重置回饋狀態為等待中');
+                    } else {
+                        console.log('🔒 局部更新：保護已提交狀態，不重置');
+                        // 只更新會話ID，保持已提交狀態
+                        self.uiManager.setFeedbackState(window.MCPFeedback.Utils.CONSTANTS.FEEDBACK_SUBMITTED, sessionData.session_id);
+                    }
                 }
 
                 // 更新 AI 摘要內容
                 if (self.uiManager) {
                     // console.log('🔧 準備更新 AI 摘要內容，summary 長度:', sessionData.summary ? sessionData.summary.length : 'undefined');
                     self.uiManager.updateAISummaryContent(sessionData.summary);
-                    self.uiManager.resetFeedbackForm();
+                    self.uiManager.resetFeedbackForm(false);  // 不清空文字內容
                     self.uiManager.updateStatusIndicator();
                 }
 
@@ -1279,6 +1785,35 @@
                     self.hideCountdownDisplay();
 
                     console.log('⏸️ 自動提交倒數計時已停止');
+                },
+
+                // 暫停倒數計時
+                pause: function() {
+                    if (this.countdown && this.countdown.pause) {
+                        this.countdown.pause();
+                        self.updateCountdownPauseState(true);
+                        console.log('⏸ 自動提交倒數計時已暫停');
+                    }
+                },
+
+                // 恢復倒數計時
+                resume: function() {
+                    if (this.countdown && this.countdown.resume) {
+                        this.countdown.resume();
+                        self.updateCountdownPauseState(false);
+                        console.log('▶ 自動提交倒數計時已恢復');
+                    }
+                },
+
+                // 切換暫停/恢復狀態
+                togglePause: function() {
+                    if (!this.countdown) return;
+                    
+                    if (this.countdown.isPaused()) {
+                        this.resume();
+                    } else {
+                        this.pause();
+                    }
                 }
             };
 
@@ -1511,6 +2046,8 @@
 
         if (countdownDisplay) {
             countdownDisplay.style.display = 'none';
+            // 重置暫停狀態
+            this.updateCountdownPauseState(false);
         }
     };
 
@@ -1567,6 +2104,68 @@
             }
             statusElement.className = 'auto-submit-status-btn disabled';
         }
+    };
+
+    /**
+     * 更新倒數計時器暫停狀態
+     */
+    FeedbackApp.prototype.updateCountdownPauseState = function(isPaused) {
+        const countdownDisplay = document.getElementById('countdownDisplay');
+        const pauseBtn = document.getElementById('countdownPauseBtn');
+        
+        if (!countdownDisplay || !pauseBtn) return;
+        
+        // 更新暫停/恢復圖標
+        const pauseIcon = pauseBtn.querySelector('.pause-icon');
+        const resumeIcon = pauseBtn.querySelector('.resume-icon');
+        
+        if (isPaused) {
+            countdownDisplay.classList.add('paused');
+            if (pauseIcon) pauseIcon.style.display = 'none';
+            if (resumeIcon) resumeIcon.style.display = 'inline';
+            
+            // 更新按鈕的 tooltip
+            const resumeTitle = window.i18nManager ?
+                window.i18nManager.t('autoSubmit.resumeCountdown', '恢復倒數') :
+                '恢復倒數';
+            pauseBtn.setAttribute('title', resumeTitle);
+            pauseBtn.setAttribute('data-i18n-title', 'autoSubmit.resumeCountdown');
+        } else {
+            countdownDisplay.classList.remove('paused');
+            if (pauseIcon) pauseIcon.style.display = 'inline';
+            if (resumeIcon) resumeIcon.style.display = 'none';
+            
+            // 更新按鈕的 tooltip
+            const pauseTitle = window.i18nManager ?
+                window.i18nManager.t('autoSubmit.pauseCountdown', '暫停倒數') :
+                '暫停倒數';
+            pauseBtn.setAttribute('title', pauseTitle);
+            pauseBtn.setAttribute('data-i18n-title', 'autoSubmit.pauseCountdown');
+        }
+    };
+
+    /**
+     * 設置用戶活動監聽器（用於重置會話超時）
+     */
+    FeedbackApp.prototype.setupUserActivityListeners = function() {
+        const self = this;
+        
+        // 定義需要監聽的活動事件
+        const activityEvents = ['click', 'keypress', 'mousemove', 'touchstart', 'scroll'];
+        
+        // 防抖處理，避免過於頻繁地重置計時器
+        const resetTimeout = window.MCPFeedback.Utils.DOM.debounce(function() {
+            if (self.webSocketManager) {
+                self.webSocketManager.resetSessionTimeout();
+            }
+        }, 5000, false); // 5秒內的連續活動只重置一次
+        
+        // 為每個事件添加監聽器
+        activityEvents.forEach(function(eventType) {
+            document.addEventListener(eventType, resetTimeout, { passive: true });
+        });
+        
+        console.log('✅ 用戶活動監聽器已設置');
     };
 
     /**

@@ -70,27 +70,26 @@
      */
     AudioSettingsUI.prototype.createUI = function() {
         const html = `
-            <div class="audio-management-section">
-                <div class="audio-management-header">
-                    <h4 class="audio-management-title" data-i18n="audio.notification.title">
+            <div class="settings-card">
+                <div class="settings-card-header">
+                    <h3 class="settings-card-title" data-i18n="audio.notification.title">
                         🔊 音效通知設定
-                    </h4>
+                    </h3>
                 </div>
-                <div class="audio-management-description" data-i18n="audio.notification.description">
-                    設定會話更新時的音效通知
-                </div>
-                
-                <div class="audio-settings-controls">
+                <div class="settings-card-body">
+                    <div class="audio-management-description" data-i18n="audio.notification.description">
+                        設定會話更新時的音效通知
+                    </div>
+                    
+                    <div class="audio-settings-controls">
                     <!-- 啟用開關 -->
                     <div class="setting-item">
                         <div class="setting-info">
-                            <div class="setting-label" data-i18n="audio.notification.enabled">啟用音效通知</div>
-                            <div class="setting-description" data-i18n="audio.notification.enabledDesc">
-                                啟用後將在有新會話更新時播放音效通知
-                            </div>
+                            <div class="setting-label" data-i18n="audio.notification.enabled"></div>
+                            <div class="setting-description" data-i18n="audio.notification.enabledDesc"></div>
                         </div>
                         <div class="setting-control">
-                            <button type="button" id="audioNotificationEnabled" class="toggle-btn" aria-label="切換音效通知">
+                            <button type="button" id="audioNotificationEnabled" class="toggle-btn" data-i18n-aria-label="aria.toggleAudioNotification">
                                 <span class="toggle-slider"></span>
                             </button>
                         </div>
@@ -141,6 +140,7 @@
                             <!-- 自訂音效列表將在這裡動態生成 -->
                         </div>
                     </div>
+                </div>
                 </div>
             </div>
         `;
@@ -663,6 +663,16 @@
             const translation = this.t(key);
             if (translation && translation !== key) {
                 element.placeholder = translation;
+            }
+        });
+
+        // 對有 data-i18n-aria-label 屬性的元素應用翻譯
+        const ariaLabelElements = this.container.querySelectorAll('[data-i18n-aria-label]');
+        ariaLabelElements.forEach(element => {
+            const key = element.getAttribute('data-i18n-aria-label');
+            const translation = this.t(key);
+            if (translation && translation !== key) {
+                element.setAttribute('aria-label', translation);
             }
         });
 
